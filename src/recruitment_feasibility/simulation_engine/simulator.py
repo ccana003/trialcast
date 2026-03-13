@@ -44,11 +44,51 @@ class RecruitmentSimulator:
             estimated_recruitment_duration_months=duration_months,
         )
 
-    @staticmethod
-    def _risk_label(enrollment_probability: float) -> str:
-        if enrollment_probability < 0.02:
+    def simulate_distribution(
+        self,
+        predicted_enrollment_probability: float,
+        predicted_accrual_rate: float,
+        target_enrollment: int,
+        n_simulations: int = 1000,
+        max_months: int = 60,
+        random_state: int = 42,
+    ) -> Dict[str, float]:
+        """Run Monte Carlo simulations for stochastic month-by-month recruitment."""
+        enrollment_prob = float(np.clip(predicted_enrollment_probability, 0.001, 0.95))
+        accrual_rate = max(0.1, float(predicted_accrual_rate))
+
+        expected_contacts = max(1.0, accrual_rate / enrollment_prob)
+        rng = np.random.default_rng(seed=random_state)
+        completion_months = np.zeros(n_simulations, dtype=float)
+
+        for sim_idx in range(n_simulations):
+            enrolled_total = 0
+            for month in range(1, max_months + 1):
+                month_contacts = max(1, int(rng.poisson(lam=expected_contacts)))
+                month_enrolled = int(rng.binomial(n=month_contacts, p=enrollment_prob))
+                enrolled_total += month_enrolled
+
+                if enrolled_total >= target_enrollment:
+                    completion_months[sim_idx] = float(month)
+                    break
+            else:
+                completion_months[sim_idx] = float(max_months)
+
+        return {
+            "median_duration_months": float(np.median(completion_months)),
+            "p80_duration_months": float(np.quantile(completion_months, 0.80)),
+            "p90_duration_months": float(np.quantile(completion_months, 0.90)),
+            "probability_within_12_months": float(np.mean(completion_months <= 12.0)),
+            "probability_within_24_months": float(np.mean(completion_months <= 24.0)),
+        }
+
+    def _risk_label(self, enrollment_probability: float) -> str:
+        low = self.enrollment_model.risk_threshold_low
+        high = self.enrollment_model.risk_threshold_high
+
+        if enrollment_probability <= low:
             return "High"
-        if enrollment_probability < 0.05:
+        if enrollment_probability <= high:
             return "Moderate"
         return "Low"
 

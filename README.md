@@ -34,6 +34,22 @@ src/recruitment_feasibility/
 PYTHONPATH=src streamlit run src/recruitment_feasibility/ui_application/streamlit_app.py
 ```
 
+## Enhancements in this version
+
+- **Multi-model training with model selection**
+  - The trainer now evaluates both ElasticNet and GradientBoostingRegressor.
+  - Cross-validation MAE is used to select the winning model for each target.
+- **Missing-data indicator features**
+  - `has_feasibility_data`, `has_recruitment_data`, and `has_protocol_data` are generated during ingestion and included in training.
+- **Data-driven risk classification**
+  - Risk labels are based on the training target distribution (bottom 30% = High risk, middle 40% = Moderate, top 30% = Low).
+- **Monte Carlo recruitment simulation**
+  - In addition to deterministic estimates, the simulator now supports month-by-month stochastic simulation to produce median, P80, and P90 duration forecasts and completion probabilities at 12 and 24 months.
+- **Feature review workflow in UI**
+  - Users can run extraction, inspect and edit extracted protocol features, and then run simulation.
+- **Model explanation panel**
+  - When ElasticNet is selected, the app displays top positive and negative coefficient drivers for enrollment probability.
+
 ## Notes
 
 - The MVP uses rule-based eligibility parsing for interpretability.

@@ -8,10 +8,11 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import ElasticNet
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_predict, cross_val_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 
@@ -45,6 +46,9 @@ class ModelArtifacts:
     feature_columns: List[str]
     target_column: str
     evaluation: EvaluationMetrics
+    selected_model_name: str
+    risk_threshold_low: float
+    risk_threshold_high: float
 
 
 class RecruitmentModelTrainer:
@@ -82,6 +86,7 @@ class RecruitmentModelTrainer:
         self,
         numeric_features: List[str],
         categorical_features: List[str],
+        model_name: str,
     ) -> Pipeline:
         """Build a model pipeline supporting missing values and mixed types."""
         numeric_pipeline = Pipeline(
@@ -102,13 +107,15 @@ class RecruitmentModelTrainer:
             ],
         )
 
-        model = RandomForestRegressor(
-            n_estimators=200,
-            max_depth=6,
-            random_state=self.random_state,
-        )
+        model_map = {
+            "elasticnet": ElasticNet(alpha=0.05, l1_ratio=0.5, random_state=self.random_state, max_iter=5000),
+            "gradient_boosting": GradientBoostingRegressor(random_state=self.random_state),
+        }
 
-        return Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+        if model_name not in model_map:
+            raise ValueError(f"Unsupported model_name: {model_name}")
+
+        return Pipeline(steps=[("preprocessor", preprocessor), ("model", model_map[model_name])])
 
     def _validate_training_data(self, train_df: pd.DataFrame, target_column: str) -> None:
         if len(train_df) < self.min_training_rows:
@@ -130,25 +137,28 @@ class RecruitmentModelTrainer:
             "r2": float(r2_score(actual, predicted)),
         }
 
-    def _evaluate_model(
-        self,
-        model: Pipeline,
-        X_validation: pd.DataFrame,
-        y_validation: pd.Series,
-        y_train: pd.Series,
-    ) -> EvaluationMetrics:
-        model_pred = model.predict(X_validation)
-        baseline_pred = np.full(shape=len(y_validation), fill_value=float(y_train.mean()))
+    def _cross_validate_model(self, model: Pipeline, X: pd.DataFrame, y: pd.Series) -> EvaluationMetrics:
+        """Evaluate model via cross-validation and baseline comparison."""
+        n_splits = min(5, len(X))
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
 
-        model_metrics = self._compute_metrics(y_validation, model_pred)
-        baseline_metrics = self._compute_metrics(y_validation, baseline_pred)
+        model_predictions = cross_val_predict(model, X, y, cv=cv)
+        baseline_predictions = np.zeros_like(model_predictions, dtype=float)
+
+        for _, validation_idx in cv.split(X):
+            train_idx = np.setdiff1d(np.arange(len(y)), validation_idx)
+            train_mean = float(y.iloc[train_idx].mean())
+            baseline_predictions[validation_idx] = train_mean
+
+        model_metrics = self._compute_metrics(y, model_predictions)
+        baseline_metrics = self._compute_metrics(y, baseline_predictions)
 
         return EvaluationMetrics(
-            train_rows=len(y_train),
-            validation_rows=len(y_validation),
-            target_min=float(y_train.min()),
-            target_median=float(y_train.median()),
-            target_max=float(y_train.max()),
+            train_rows=len(y),
+            validation_rows=len(y),
+            target_min=float(y.min()),
+            target_median=float(y.median()),
+            target_max=float(y.max()),
             model_mae=model_metrics["mae"],
             model_rmse=model_metrics["rmse"],
             model_r2=model_metrics["r2"],
@@ -157,6 +167,11 @@ class RecruitmentModelTrainer:
             baseline_r2=baseline_metrics["r2"],
         )
 
+    @staticmethod
+    def _risk_thresholds(y: pd.Series) -> tuple[float, float]:
+        """Compute lower and upper risk thresholds using target quantiles."""
+        return float(y.quantile(0.30)), float(y.quantile(0.70))
+
     def train(
         self,
         df: pd.DataFrame,
@@ -164,7 +179,7 @@ class RecruitmentModelTrainer:
         target_column: str,
         categorical_features: Optional[List[str]] = None,
     ) -> ModelArtifacts:
-        """Train a baseline model and return artifacts."""
+        """Train baseline candidate models and select the best by MAE."""
         categorical_features = categorical_features or []
         numeric_features = [col for col in feature_columns if col not in categorical_features]
 
@@ -174,20 +189,34 @@ class RecruitmentModelTrainer:
         X = train_df[feature_columns]
         y = train_df[target_column]
 
-        X_train, X_validation, y_train, y_validation = train_test_split(
-            X,
-            y,
-            test_size=0.25,
-            random_state=self.random_state,
-        )
+        candidates = {
+            "elasticnet": self.build_pipeline(numeric_features, categorical_features, model_name="elasticnet"),
+            "gradient_boosting": self.build_pipeline(
+                numeric_features,
+                categorical_features,
+                model_name="gradient_boosting",
+            ),
+        }
 
-        model = self.build_pipeline(numeric_features=numeric_features, categorical_features=categorical_features)
-        model.fit(X_train, y_train)
-        evaluation = self._evaluate_model(model, X_validation, y_validation, y_train)
+        cv = KFold(n_splits=min(5, len(X)), shuffle=True, random_state=self.random_state)
+        mae_scores = {
+            model_name: float(-cross_val_score(model, X, y, cv=cv, scoring="neg_mean_absolute_error").mean())
+            for model_name, model in candidates.items()
+        }
+
+        selected_model_name = min(mae_scores, key=mae_scores.get)
+        selected_model = candidates[selected_model_name]
+        evaluation = self._cross_validate_model(selected_model, X, y)
+
+        selected_model.fit(X, y)
+        risk_low, risk_high = self._risk_thresholds(y)
 
         return ModelArtifacts(
-            model=model,
+            model=selected_model,
             feature_columns=feature_columns,
             target_column=target_column,
             evaluation=evaluation,
+            selected_model_name=selected_model_name,
+            risk_threshold_low=risk_low,
+            risk_threshold_high=risk_high,
         )

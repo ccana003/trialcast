@@ -47,4 +47,8 @@ class DataIngestionService:
             how="left",
         )
 
+        merged["has_feasibility_data"] = merged["study_id"].isin(sources["feasibility_data"]["study_id"]).astype(int)
+        merged["has_recruitment_data"] = merged["study_id"].isin(sources["recruitment_data"]["study_id"]).astype(int)
+        merged["has_protocol_data"] = merged["eligibility_criteria_text"].notna().astype(int)
+
         return merged
