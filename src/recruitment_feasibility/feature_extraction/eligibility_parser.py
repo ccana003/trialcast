@@ -7,9 +7,15 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 
-AGE_RANGE_PATTERN = re.compile(r"(?:age|aged?)\s*(\d{1,3})\s*[-–to]{1,3}\s*(\d{1,3})", re.IGNORECASE)
-SINGLE_AGE_PATTERN = re.compile(r"(?:age|aged?)\s*(?:>=|>|at least)?\s*(\d{1,3})", re.IGNORECASE)
-VISIT_COUNT_PATTERN = re.compile(r"(\d+)\s+(?:clinic\s+)?visits?", re.IGNORECASE)
+AGE_RANGE_PATTERNS = [
+    re.compile(r"(?:age|aged?)\s*(\d{1,3})\s*(?:-|–|to)\s*(\d{1,3})", re.IGNORECASE),
+    re.compile(r"between\s*(\d{1,3})\s*and\s*(\d{1,3})\s*(?:years?|yo)?", re.IGNORECASE),
+]
+MIN_AGE_PATTERNS = [
+    re.compile(r"(?:age|aged?)\s*(?:>=|=>|at\s+least|minimum\s+of)?\s*(\d{1,3})", re.IGNORECASE),
+    re.compile(r"older\s+than\s*(\d{1,3})", re.IGNORECASE),
+]
+VISIT_COUNT_PATTERN = re.compile(r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b\s+(?:on-site\s+|in-person\s+|clinic\s+)?visits?\b", re.IGNORECASE)
 
 KNOWN_DISEASE_KEYWORDS = {
     "hypertension": "hypertension",
@@ -17,6 +23,19 @@ KNOWN_DISEASE_KEYWORDS = {
     "cancer": "oncology",
     "asthma": "asthma",
     "depression": "mental_health",
+}
+
+WORD_TO_NUMBER = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
 }
 
 
@@ -44,8 +63,10 @@ class EligibilityFeatureExtractor:
             return EligibilityFeatures(None, None, None, None, 0, 0.0)
 
         lowered = text.lower()
-        min_age, max_age = self._extract_age_range(text)
-        visit_count = self._extract_visit_count(text)
+        normalized_text = self._normalize_text(text)
+
+        min_age, max_age = self._extract_age_range(normalized_text)
+        visit_count = self._extract_visit_count(normalized_text)
         disease_category = self._extract_disease_category(lowered)
         healthy_volunteer_flag = int("healthy volunteer" in lowered)
         complexity = self._estimate_complexity(text)
@@ -71,22 +92,35 @@ class EligibilityFeatureExtractor:
             "eligibility_complexity": features.eligibility_complexity,
         }
 
-    def _extract_age_range(self, text: str) -> tuple[Optional[int], Optional[int]]:
-        range_match = AGE_RANGE_PATTERN.search(text)
-        if range_match:
-            return int(range_match.group(1)), int(range_match.group(2))
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join(text.split())
 
-        single_match = SINGLE_AGE_PATTERN.search(text)
-        if single_match:
-            return int(single_match.group(1)), None
+    def _extract_age_range(self, text: str) -> tuple[Optional[int], Optional[int]]:
+        for pattern in AGE_RANGE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+
+        for pattern in MIN_AGE_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                min_age = int(match.group(1))
+                if "older than" in match.group(0).lower():
+                    min_age += 1
+                return min_age, None
 
         return None, None
 
     def _extract_visit_count(self, text: str) -> Optional[int]:
         visit_match = VISIT_COUNT_PATTERN.search(text)
-        if visit_match:
-            return int(visit_match.group(1))
-        return None
+        if not visit_match:
+            return None
+
+        token = visit_match.group(1).lower()
+        if token.isdigit():
+            return int(token)
+        return WORD_TO_NUMBER.get(token)
 
     def _extract_disease_category(self, lowered_text: str) -> Optional[str]:
         for keyword, category in KNOWN_DISEASE_KEYWORDS.items():

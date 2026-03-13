@@ -16,7 +16,10 @@ import streamlit as st
 
 from recruitment_feasibility.data_ingestion.loader import DataIngestionService
 from recruitment_feasibility.feature_extraction.eligibility_parser import EligibilityFeatureExtractor
-from recruitment_feasibility.model_training.trainer import RecruitmentModelTrainer
+from recruitment_feasibility.model_training.trainer import (
+    InsufficientTrainingDataError,
+    RecruitmentModelTrainer,
+)
 from recruitment_feasibility.simulation_engine.simulator import RecruitmentSimulator
 
 
@@ -24,8 +27,10 @@ REPO_ROOT = CURRENT_FILE.parents[3]
 DATA_DIR = REPO_ROOT / "data"
 
 
-def build_training_assets() -> RecruitmentSimulator:
+@st.cache_resource(show_spinner=False)
+def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimulator:
     """Load data, extract features, train models, and return simulator."""
+    _ = data_signature
     ingestion = DataIngestionService(DATA_DIR)
     extractor = EligibilityFeatureExtractor()
     trainer = RecruitmentModelTrainer()
@@ -66,14 +71,73 @@ def build_training_assets() -> RecruitmentSimulator:
     return RecruitmentSimulator(enrollment_model=enrollment_model, accrual_model=accrual_model)
 
 
+def _data_signature() -> tuple[float, ...]:
+    """Return a timestamp signature so cache refreshes when source data changes."""
+    return tuple(
+        (DATA_DIR / file_name).stat().st_mtime
+        for file_name in ["studies.csv", "feasibility_data.csv", "recruitment_data.csv", "protocol_data.csv"]
+    )
+
+
+def _render_model_quality(simulator: RecruitmentSimulator) -> None:
+    st.subheader("Model quality")
+
+    enrollment_eval = simulator.enrollment_model.evaluation
+    accrual_eval = simulator.accrual_model.evaluation
+
+    st.caption(
+        "Models are validated on a hold-out split and compared against a mean-target baseline."
+    )
+
+    quality_df = pd.DataFrame(
+        [
+            {
+                "target": "enrollment_probability",
+                "train_rows": enrollment_eval.train_rows,
+                "validation_rows": enrollment_eval.validation_rows,
+                "model_mae": enrollment_eval.model_mae,
+                "baseline_mae": enrollment_eval.baseline_mae,
+                "model_rmse": enrollment_eval.model_rmse,
+                "baseline_rmse": enrollment_eval.baseline_rmse,
+                "model_r2": enrollment_eval.model_r2,
+                "baseline_r2": enrollment_eval.baseline_r2,
+            },
+            {
+                "target": "expected_accrual_rate",
+                "train_rows": accrual_eval.train_rows,
+                "validation_rows": accrual_eval.validation_rows,
+                "model_mae": accrual_eval.model_mae,
+                "baseline_mae": accrual_eval.baseline_mae,
+                "model_rmse": accrual_eval.model_rmse,
+                "baseline_rmse": accrual_eval.baseline_rmse,
+                "model_r2": accrual_eval.model_r2,
+                "baseline_r2": accrual_eval.baseline_r2,
+            },
+        ]
+    )
+    st.dataframe(quality_df, use_container_width=True)
+
+    st.caption(
+        "Data ranges: "
+        f"Enrollment probability [{enrollment_eval.target_min:.4f}, {enrollment_eval.target_median:.4f}, {enrollment_eval.target_max:.4f}] | "
+        f"Accrual rate [{accrual_eval.target_min:.2f}, {accrual_eval.target_median:.2f}, {accrual_eval.target_max:.2f}]"
+    )
+
+
 def render_app() -> None:
     """Render the Streamlit user interface."""
     st.set_page_config(page_title="Recruitment Feasibility Simulator", layout="wide")
     st.title("Recruitment Feasibility and Simulation Platform")
     st.caption("Prototype MVP using historical institutional recruitment data.")
 
-    with st.spinner("Loading historical data and training baseline models..."):
-        simulator = build_training_assets()
+    try:
+        with st.spinner("Loading historical data and training baseline models..."):
+            simulator = build_training_assets(_data_signature())
+    except InsufficientTrainingDataError as exc:
+        st.error(f"Unable to train model with current data: {exc}")
+        st.stop()
+
+    _render_model_quality(simulator)
 
     st.subheader("Proposed Study Inputs")
     col1, col2 = st.columns(2)
