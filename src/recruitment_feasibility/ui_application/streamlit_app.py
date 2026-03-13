@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+
+
+CURRENT_FILE = Path(__file__).resolve()
+SRC_ROOT = CURRENT_FILE.parents[2]
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 import pandas as pd
 import streamlit as st
@@ -13,7 +20,8 @@ from recruitment_feasibility.model_training.trainer import RecruitmentModelTrain
 from recruitment_feasibility.simulation_engine.simulator import RecruitmentSimulator
 
 
-DATA_DIR = Path("data")
+REPO_ROOT = CURRENT_FILE.parents[3]
+DATA_DIR = REPO_ROOT / "data"
 
 
 def build_training_assets() -> RecruitmentSimulator:
