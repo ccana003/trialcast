@@ -1,0 +1,9 @@
+study_id,investigator_experience,reviewer_concern_recruitment,target_enrollment
+STUDY-001,12,low,180
+STUDY-002,8,medium,220
+STUDY-003,15,low,300
+STUDY-004,10,high,120
+STUDY-005,6,medium,80
+STUDY-006,7,high,140
+STUDY-007,4,high,100
+STUDY-008,9,medium,200
