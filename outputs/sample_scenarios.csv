@@ -1,0 +1,4 @@
+scenario_name,delta_staff,delta_sites,delta_duration,improvement_flag
+baseline,0,0,0.0,0
++1 staff,1,0,-4.6,1
+add site,0,1,-5.9,1

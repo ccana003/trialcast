@@ -16,6 +16,13 @@ class DataIngestionService:
     studies may only appear in a subset of source systems.
     """
 
+    RECRUITMENT_CAPACITY_DEFAULTS = {
+        "recruitment_staff_count": 1,
+        "dedicated_recruiter": 0,
+        "site_count": 1,
+        "recruitment_methods_count": 1,
+    }
+
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = data_dir
 
@@ -38,6 +45,12 @@ class DataIngestionService:
         else:
             # Keep ingestion resilient when CTMS extract is not yet provisioned.
             sources["ctms_data"] = pd.DataFrame()
+
+        committee_file = self.data_dir / "feasibility_committee_data.csv"
+        if committee_file.exists():
+            sources["feasibility_committee_data"] = self.load_csv("feasibility_committee_data.csv")
+        else:
+            sources["feasibility_committee_data"] = pd.DataFrame()
         return sources
 
     def build_merged_training_frame(self, sources: Dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -55,6 +68,21 @@ class DataIngestionService:
             on="study_id",
             how="left",
         )
+
+        committee_data = sources.get("feasibility_committee_data", pd.DataFrame()).copy()
+        if not committee_data.empty:
+            committee_keep_columns = [
+                col
+                for col in ["study_id", "feasibility_score", "committee_recommendation", "notes"]
+                if col in committee_data.columns
+            ]
+            if committee_keep_columns and "study_id" in committee_keep_columns:
+                merged = merged.merge(committee_data[committee_keep_columns], on="study_id", how="left")
+        else:
+            merged["feasibility_score"] = pd.NA
+            merged["committee_recommendation"] = pd.NA
+            merged["notes"] = pd.NA
+
         ctms = sources.get("ctms_data", pd.DataFrame()).copy()
         if not ctms.empty:
             ctms = ctms.rename(
@@ -140,4 +168,17 @@ class DataIngestionService:
                 merged[sample_col] = pd.NA
             merged[sample_col] = pd.to_numeric(merged[sample_col], errors="coerce")
 
+        self._apply_recruitment_capacity_defaults(merged)
+
         return merged
+
+    def _apply_recruitment_capacity_defaults(self, merged: pd.DataFrame) -> None:
+        """Ensure recruitment capacity features always exist and are numeric."""
+        for column_name, default_value in self.RECRUITMENT_CAPACITY_DEFAULTS.items():
+            if column_name not in merged.columns:
+                merged[column_name] = default_value
+            merged[column_name] = (
+                pd.to_numeric(merged[column_name], errors="coerce")
+                .fillna(default_value)
+                .astype(int)
+            )
