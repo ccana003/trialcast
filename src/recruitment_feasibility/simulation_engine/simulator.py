@@ -37,30 +37,30 @@ class RecruitmentSimulator:
             )[0]
         )
 
-        # ============================
-        # 🔧 FIX 1: Realistic minimums
-        # ============================
+        # Apply realistic minimum/maximum bounds to model outputs.
         enrollment_prob = float(np.clip(enrollment_prob, 0.05, 0.95))
-        accrual_rate = max(1.5, accrual_rate)
+        accrual_rate = max(2.0, accrual_rate)
 
-        # ============================
-        # 🔧 FIX 2: Simple domain logic
-        # ============================
-        visit_count = proposal_features.get("visit_count", 2)
-        complexity = proposal_features.get("eligibility_complexity", 1)
+        # Domain-informed adjustments:
+        # - fewer visits generally improves participation cadence;
+        # - higher eligibility complexity generally slows accrual.
+        visit_count = pd.to_numeric(pd.Series([proposal_features.get("visit_count", 2)]), errors="coerce").iloc[0]
+        complexity = pd.to_numeric(pd.Series([proposal_features.get("eligibility_complexity", 1.0)]), errors="coerce").iloc[0]
+        visit_count = 2 if pd.isna(visit_count) else float(visit_count)
+        complexity = 1.0 if pd.isna(complexity) else float(complexity)
 
-        # Fewer visits → faster recruitment
+        # Fewer visits -> faster recruitment; many visits -> slower recruitment.
         if visit_count <= 2:
             accrual_rate += 0.5
         elif visit_count >= 5:
             accrual_rate -= 0.5
 
-        # Higher complexity → slower recruitment
+        # Higher complexity -> slower recruitment.
         if complexity > 1.5:
             accrual_rate -= 0.5
 
-        # Final safety floor
-        accrual_rate = max(1.0, accrual_rate)
+        # Final safety floor required by product constraints.
+        accrual_rate = max(2.0, accrual_rate)
 
         # ============================
         # 📊 Derived metrics
@@ -92,7 +92,7 @@ class RecruitmentSimulator:
     ) -> Dict[str, float]:
         """Run Monte Carlo simulations for stochastic month-by-month recruitment."""
         enrollment_prob = float(np.clip(predicted_enrollment_probability, 0.05, 0.95))
-        accrual_rate = max(1.0, float(predicted_accrual_rate))
+        accrual_rate = max(2.0, float(predicted_accrual_rate))
 
         expected_contacts = max(1.0, accrual_rate / enrollment_prob)
         rng = np.random.default_rng(seed=random_state)
