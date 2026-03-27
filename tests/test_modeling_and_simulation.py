@@ -7,6 +7,25 @@ from recruitment_feasibility.model_training.trainer import RecruitmentModelTrain
 from recruitment_feasibility.simulation_engine.simulator import RecruitmentSimulator
 
 
+def _feature_columns() -> list[str]:
+    return [
+        "study_type",
+        "investigator_experience",
+        "reviewer_concern_recruitment",
+        "visit_count",
+        "eligibility_complexity",
+        "disease_category",
+        "healthy_volunteer_flag",
+        "has_feasibility_data",
+        "has_recruitment_data",
+        "has_protocol_data",
+        "recruitment_staff_count",
+        "dedicated_recruiter",
+        "site_count",
+        "recruitment_methods_count",
+    ]
+
+
 def _build_training_df() -> pd.DataFrame:
     rows = []
     for i in range(24):
@@ -25,6 +44,10 @@ def _build_training_df() -> pd.DataFrame:
                 "has_feasibility_data": 1 if i % 5 else 0,
                 "has_recruitment_data": 1 if i % 4 else 0,
                 "has_protocol_data": 1 if i % 3 else 0,
+                "recruitment_staff_count": 1 + (i % 3),
+                "dedicated_recruiter": 1 if i % 4 == 0 else 0,
+                "site_count": 1 + (i % 4),
+                "recruitment_methods_count": 1 + (i % 3),
                 "patients_contacted": contacted,
                 "participants_enrolled": enrolled,
                 "recruitment_start_date": "2023-01-01",
@@ -58,27 +81,33 @@ def test_loader_adds_missing_data_indicators(tmp_path) -> None:
     assert int(by_id.loc["C", "has_protocol_data"]) == 1
 
 
+def test_loader_applies_recruitment_capacity_defaults(tmp_path) -> None:
+    service = DataIngestionService(tmp_path)
+    sources = {
+        "studies": pd.DataFrame({"study_id": ["A"]}),
+        "feasibility_data": pd.DataFrame({"study_id": ["A"]}),
+        "recruitment_data": pd.DataFrame({"study_id": ["A"]}),
+        "protocol_data": pd.DataFrame({"study_id": ["A"], "eligibility_criteria_text": ["Adults"]}),
+    }
+
+    merged = service.build_merged_training_frame(sources)
+
+    assert int(merged.loc[0, "recruitment_staff_count"]) == 1
+    assert int(merged.loc[0, "dedicated_recruiter"]) == 0
+    assert int(merged.loc[0, "site_count"]) == 1
+    assert int(merged.loc[0, "recruitment_methods_count"]) == 1
+
+
 def test_trainer_selects_model_and_sets_risk_thresholds() -> None:
     trainer = RecruitmentModelTrainer(random_state=1)
     df = trainer.add_target_metrics(_build_training_df())
 
-    features = [
-        "study_type",
-        "investigator_experience",
-        "reviewer_concern_recruitment",
-        "visit_count",
-        "eligibility_complexity",
-        "disease_category",
-        "healthy_volunteer_flag",
-        "has_feasibility_data",
-        "has_recruitment_data",
-        "has_protocol_data",
-    ]
+    features = _feature_columns()
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
 
     artifacts = trainer.train(df, feature_columns=features, target_column="enrollment_probability", categorical_features=categorical)
 
-    assert artifacts.selected_model_name in {"elasticnet", "gradient_boosting"}
+    assert artifacts.selected_model_name in {"elasticnet", "random_forest"}
     assert artifacts.risk_threshold_low <= artifacts.risk_threshold_high
 
 
@@ -86,18 +115,7 @@ def test_simulate_distribution_returns_summary_metrics() -> None:
     trainer = RecruitmentModelTrainer(random_state=1)
     df = trainer.add_target_metrics(_build_training_df())
 
-    features = [
-        "study_type",
-        "investigator_experience",
-        "reviewer_concern_recruitment",
-        "visit_count",
-        "eligibility_complexity",
-        "disease_category",
-        "healthy_volunteer_flag",
-        "has_feasibility_data",
-        "has_recruitment_data",
-        "has_protocol_data",
-    ]
+    features = _feature_columns()
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
 
     enrollment_model = trainer.train(df, feature_columns=features, target_column="enrollment_probability", categorical_features=categorical)
@@ -128,18 +146,7 @@ def test_simulate_changes_contacts_when_visit_burden_changes() -> None:
     trainer = RecruitmentModelTrainer(random_state=1)
     df = trainer.add_target_metrics(_build_training_df())
 
-    features = [
-        "study_type",
-        "investigator_experience",
-        "reviewer_concern_recruitment",
-        "visit_count",
-        "eligibility_complexity",
-        "disease_category",
-        "healthy_volunteer_flag",
-        "has_feasibility_data",
-        "has_recruitment_data",
-        "has_protocol_data",
-    ]
+    features = _feature_columns()
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
 
     enrollment_model = trainer.train(df, feature_columns=features, target_column="enrollment_probability", categorical_features=categorical)
@@ -158,6 +165,10 @@ def test_simulate_changes_contacts_when_visit_burden_changes() -> None:
         "has_feasibility_data": 1,
         "has_recruitment_data": 1,
         "has_protocol_data": 1,
+        "recruitment_staff_count": 1,
+        "dedicated_recruiter": 0,
+        "site_count": 1,
+        "recruitment_methods_count": 1,
     }
 
     modified_proposal = dict(base_proposal, visit_count=6, eligibility_complexity=2.0)
@@ -167,3 +178,53 @@ def test_simulate_changes_contacts_when_visit_burden_changes() -> None:
 
     assert current.predicted_enrollment_probability > modified.predicted_enrollment_probability
     assert current.estimated_contacts_required < modified.estimated_contacts_required
+
+
+def test_simulate_scenarios_returns_required_columns() -> None:
+    trainer = RecruitmentModelTrainer(random_state=1)
+    df = trainer.add_target_metrics(_build_training_df())
+
+    features = _feature_columns()
+    categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
+
+    enrollment_model = trainer.train(df, feature_columns=features, target_column="enrollment_probability", categorical_features=categorical)
+    accrual_model = trainer.train(df, feature_columns=features, target_column="expected_accrual_rate", categorical_features=categorical)
+
+    simulator = RecruitmentSimulator(enrollment_model=enrollment_model, accrual_model=accrual_model)
+
+    base_input = {
+        "study_type": "interventional",
+        "investigator_experience": 5,
+        "reviewer_concern_recruitment": "medium",
+        "visit_count": 2,
+        "eligibility_complexity": 1.1,
+        "disease_category": "hypertension",
+        "healthy_volunteer_flag": 0,
+        "has_feasibility_data": 1,
+        "has_recruitment_data": 1,
+        "has_protocol_data": 1,
+        "recruitment_staff_count": 1,
+        "dedicated_recruiter": 0,
+        "site_count": 1,
+        "recruitment_methods_count": 1,
+        "target_enrollment": 120,
+    }
+
+    scenarios = [
+        {"scenario_name": "baseline"},
+        {"scenario_name": "+1 staff", "recruitment_staff_count": 2},
+    ]
+    out = simulator.simulate_scenarios(base_input=base_input, scenarios=scenarios)
+
+    assert list(out["scenario_name"]) == ["baseline", "+1 staff"]
+    assert set(out.columns) == {
+        "scenario_name",
+        "recruitment_staff_count",
+        "site_count",
+        "recruitment_methods_count",
+        "enrollment_probability",
+        "predicted_accrual_rate",
+        "estimated_duration_months",
+        "contacts_required",
+        "risk_level",
+    }

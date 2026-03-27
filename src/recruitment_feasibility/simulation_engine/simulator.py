@@ -15,6 +15,13 @@ from recruitment_feasibility.model_training.trainer import ModelArtifacts
 class RecruitmentSimulator:
     """Run recruitment simulations for a proposed study."""
 
+    SCENARIO_CAPACITY_FIELDS = [
+        "recruitment_staff_count",
+        "dedicated_recruiter",
+        "site_count",
+        "recruitment_methods_count",
+    ]
+
     def __init__(self, enrollment_model: ModelArtifacts, accrual_model: ModelArtifacts) -> None:
         self.enrollment_model = enrollment_model
         self.accrual_model = accrual_model
@@ -73,6 +80,24 @@ class RecruitmentSimulator:
         if not pd.isna(local_sample) and float(local_sample) <= 40:
             accrual_rate += 0.3
 
+        # Operational effects from recruitment capacity features.
+        recruitment_staff_count = int(pd.to_numeric(pd.Series([proposal_features.get("recruitment_staff_count", 1)]), errors="coerce").fillna(1).iloc[0])
+        dedicated_recruiter = int(pd.to_numeric(pd.Series([proposal_features.get("dedicated_recruiter", 0)]), errors="coerce").fillna(0).iloc[0])
+        site_count = int(pd.to_numeric(pd.Series([proposal_features.get("site_count", 1)]), errors="coerce").fillna(1).iloc[0])
+        methods_count = int(pd.to_numeric(pd.Series([proposal_features.get("recruitment_methods_count", 1)]), errors="coerce").fillna(1).iloc[0])
+
+        staff_boost = min(0.06, max(0.0, (recruitment_staff_count - 1) * 0.015))
+        dedicated_boost = 0.02 if dedicated_recruiter == 1 else 0.0
+        site_boost = min(0.06, max(0.0, (site_count - 1) * 0.012))
+        methods_boost = min(0.05, max(0.0, (methods_count - 1) * 0.010))
+
+        enrollment_prob += staff_boost + dedicated_boost + methods_boost
+        accrual_rate += (recruitment_staff_count - 1) * 0.45
+        accrual_rate += (site_count - 1) * 0.6
+        accrual_rate += (methods_count - 1) * 0.35
+        if dedicated_recruiter == 1:
+            accrual_rate += 0.8
+
         # Final safety constraints required by product constraints.
         accrual_rate = max(1.5, accrual_rate)
         enrollment_prob = float(np.clip(enrollment_prob, 0.05, 0.95))
@@ -95,6 +120,34 @@ class RecruitmentSimulator:
             expected_accrual_rate_per_month=accrual_rate,
             estimated_recruitment_duration_months=duration_months,
         )
+
+    def simulate_scenarios(self, base_input: dict, scenarios: list[dict]) -> pd.DataFrame:
+        """Simulate multiple what-if scenarios by overriding operational fields."""
+        rows = []
+        target_enrollment = int(base_input.get("target_enrollment", 100))
+
+        for idx, scenario in enumerate(scenarios):
+            scenario_name = str(scenario.get("scenario_name") or f"Scenario {idx + 1}")
+            proposal = dict(base_input)
+            for field_name in self.SCENARIO_CAPACITY_FIELDS:
+                if field_name in scenario:
+                    proposal[field_name] = scenario[field_name]
+            result = self.simulate(proposal_features=proposal, target_enrollment=target_enrollment)
+            rows.append(
+                {
+                    "scenario_name": scenario_name,
+                    "recruitment_staff_count": int(proposal.get("recruitment_staff_count", 1)),
+                    "site_count": int(proposal.get("site_count", 1)),
+                    "recruitment_methods_count": int(proposal.get("recruitment_methods_count", 1)),
+                    "enrollment_probability": result.predicted_enrollment_probability,
+                    "predicted_accrual_rate": result.expected_accrual_rate_per_month,
+                    "estimated_duration_months": result.estimated_recruitment_duration_months,
+                    "contacts_required": result.estimated_contacts_required,
+                    "risk_level": result.recruitment_risk,
+                }
+            )
+
+        return pd.DataFrame(rows)
 
     def simulate_distribution(
         self,

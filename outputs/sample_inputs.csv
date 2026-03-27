@@ -1,0 +1,4 @@
+study_id,disease_category,eligibility_text,visit_count,recruitment_staff_count,site_count,recruitment_methods_count
+TC-001,oncology,"Adults age 18-75, biopsy-confirmed tumor, 4 visits.",4,1,1,1
+TC-002,diabetes,"Adults with A1c >= 7.0, 3 visits.",3,2,2,2
+TC-003,hypertension,"Adults age 40-75 with stage 1 hypertension, 2 visits.",2,3,3,3

@@ -10,6 +10,7 @@ SRC_ROOT = CURRENT_FILE.parents[2]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+import pandas as pd
 import streamlit as st
 
 from recruitment_feasibility.data_ingestion.loader import DataIngestionService
@@ -50,6 +51,7 @@ def _driver_messages(proposal: dict[str, object]) -> list[str]:
         f"Eligibility complexity: {complexity:.1f}",
         f"Disease category: {disease_category}",
         f"Sample size context: local={local_text}, national={national_text}",
+        f"Recruitment ops: staff={int(proposal.get('recruitment_staff_count', 1))}, sites={int(proposal.get('site_count', 1))}, methods={int(proposal.get('recruitment_methods_count', 1))}",
     ]
 
 
@@ -65,6 +67,11 @@ def _recommendations(proposal: dict[str, object]) -> list[str]:
     local_sample = proposal.get("local_sample")
     if local_sample not in (None, "") and float(local_sample) >= 120:
         recommendations.append("Consider increasing site count because local_sample target is high for one site.")
+
+    if int(proposal.get("recruitment_staff_count", 1)) <= 1:
+        recommendations.append("Add recruitment staff for medium/high enrollment targets to reduce completion time.")
+    if int(proposal.get("recruitment_methods_count", 1)) <= 1:
+        recommendations.append("Use at least two recruitment methods (e.g., EHR + referral outreach).")
 
     if not recommendations:
         recommendations.append("Current design appears balanced; monitor early screening-to-enrollment conversion.")
@@ -102,6 +109,10 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         "has_protocol_data",
         "local_sample",
         "national_sample",
+        "recruitment_staff_count",
+        "dedicated_recruiter",
+        "site_count",
+        "recruitment_methods_count",
     ]
 
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
@@ -128,7 +139,14 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
 
 def _data_signature() -> tuple[float, ...]:
     """Return a timestamp signature so cache refreshes when source data changes."""
-    files = ["studies.csv", "feasibility_data.csv", "recruitment_data.csv", "protocol_data.csv", "ctms_data.csv"]
+    files = [
+        "studies.csv",
+        "feasibility_data.csv",
+        "recruitment_data.csv",
+        "protocol_data.csv",
+        "ctms_data.csv",
+        "feasibility_committee_data.csv",
+    ]
     signature = []
     for file_name in files:
         file_path = DATA_DIR / file_name
@@ -169,6 +187,8 @@ def render_app() -> None:
         default_visit_count = st.number_input("Fallback visit count", min_value=0, value=2)
         investigator_experience = st.number_input("Investigator experience (years)", min_value=0, value=5)
         local_sample = st.number_input("Local sample target (site)", min_value=1, value=80)
+        recruitment_staff_count = st.number_input("Recruitment staff count", min_value=1, value=1)
+        dedicated_recruiter = st.checkbox("Dedicated recruiter available", value=False)
 
     with col2:
         reviewer_concern = st.selectbox("Recruitment concern level", ["low", "medium", "high"])
@@ -177,6 +197,8 @@ def render_app() -> None:
             ["hypertension", "diabetes", "oncology", "asthma", "mental_health", "other"],
         )
         national_sample = st.number_input("National sample target (all sites)", min_value=1, value=450)
+        site_count = st.number_input("Site count", min_value=1, value=1)
+        recruitment_methods_count = st.number_input("Recruitment methods count", min_value=1, value=1)
 
     st.markdown("### Step 1 — Paste eligibility criteria")
     eligibility_text = st.text_area(
@@ -224,15 +246,41 @@ def render_app() -> None:
             step=0.1,
         )
 
-    st.markdown("### Step 4 — Scenario comparison controls")
-    compare_enabled = st.checkbox("Enable scenario comparison", value=True)
-    modified_visit_count = st.number_input("Modified scenario visit_count", min_value=0, value=max(int(visit_count) - 1, 0))
-    modified_complexity = st.number_input(
-        "Modified scenario eligibility_complexity",
-        min_value=0.0,
-        max_value=10.0,
-        value=max(float(eligibility_complexity) - 0.2, 0.0),
-        step=0.1,
+    st.markdown("### Step 4 — Scenario builder")
+    st.caption("Define multiple what-if scenarios by changing operational capacity variables.")
+    scenario_seed = pd.DataFrame(
+        [
+            {
+                "scenario_name": "baseline",
+                "recruitment_staff_count": int(recruitment_staff_count),
+                "dedicated_recruiter": int(dedicated_recruiter),
+                "site_count": int(site_count),
+                "recruitment_methods_count": int(recruitment_methods_count),
+            },
+            {
+                "scenario_name": "+1 staff",
+                "recruitment_staff_count": int(recruitment_staff_count) + 1,
+                "dedicated_recruiter": int(dedicated_recruiter),
+                "site_count": int(site_count),
+                "recruitment_methods_count": int(recruitment_methods_count),
+            },
+            {
+                "scenario_name": "add site",
+                "recruitment_staff_count": int(recruitment_staff_count),
+                "dedicated_recruiter": int(dedicated_recruiter),
+                "site_count": int(site_count) + 1,
+                "recruitment_methods_count": int(recruitment_methods_count),
+            },
+        ]
+    )
+
+    if "scenario_builder" not in st.session_state:
+        st.session_state.scenario_builder = scenario_seed
+
+    st.session_state.scenario_builder = st.data_editor(
+        st.session_state.scenario_builder,
+        num_rows="dynamic",
+        use_container_width=True,
     )
 
     if st.button("Step 5 — Run feasibility simulation"):
@@ -249,24 +297,35 @@ def render_app() -> None:
             "has_protocol_data": 1,
             "local_sample": local_sample,
             "national_sample": national_sample,
+            "recruitment_staff_count": int(recruitment_staff_count),
+            "dedicated_recruiter": int(dedicated_recruiter),
+            "site_count": int(site_count),
+            "recruitment_methods_count": int(recruitment_methods_count),
+            "target_enrollment": int(target_enrollment),
         }
 
         result_current = simulator.simulate(proposal, target_enrollment=int(target_enrollment))
 
         st.markdown("## Simulation Output")
-        if compare_enabled:
-            modified_proposal = proposal.copy()
-            modified_proposal["visit_count"] = modified_visit_count
-            modified_proposal["eligibility_complexity"] = modified_complexity
-            result_modified = simulator.simulate(modified_proposal, target_enrollment=int(target_enrollment))
+        _render_result_block("Current Scenario", result_current)
 
-            left, right = st.columns(2)
-            with left:
-                _render_result_block("Current Scenario", result_current)
-            with right:
-                _render_result_block("Modified Scenario", result_modified)
-        else:
-            _render_result_block("Current Scenario", result_current)
+        scenario_records = st.session_state.scenario_builder.fillna(0).to_dict(orient="records")
+        scenario_results = simulator.simulate_scenarios(base_input=proposal, scenarios=scenario_records)
+
+        st.markdown("## Scenario Comparison Table")
+        st.dataframe(scenario_results, use_container_width=True)
+
+        best_idx = scenario_results["estimated_duration_months"].astype(float).idxmin()
+        best_row = scenario_results.loc[best_idx]
+        st.success(
+            f"Best scenario: {best_row['scenario_name']} "
+            f"(duration {best_row['estimated_duration_months']:.1f} months, "
+            f"accrual {best_row['predicted_accrual_rate']:.1f}/month)"
+        )
+
+        st.markdown("## Scenario Visualization")
+        chart_data = scenario_results[["scenario_name", "predicted_accrual_rate", "estimated_duration_months"]].set_index("scenario_name")
+        st.bar_chart(chart_data)
 
         st.markdown("## Key Drivers")
         for msg in _driver_messages(proposal):
