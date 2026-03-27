@@ -68,19 +68,19 @@ class DataIngestionService:
         # --- FINAL SAFETY: ensure no duplicates anywhere ---
         merged = merged.loc[:, ~merged.columns.duplicated()]
 
-        # --- Debug (temporary) ---
-        print("Visit count summary:")
-        print(merged["visit_count"].describe())
-        print("Missing visit_count:", merged["visit_count"].isna().sum())
-
-        print("DUPLICATE COLUMNS:")
-        print(merged.columns[merged.columns.duplicated()])
-        print("Sample eligibility text:")
-        print(merged["eligibility_criteria_text"].head(5))
-        # --- FIX: ensure visit_count exists ---
-        if merged["visit_count"].isna().all():
-            print("⚠️ visit_count is completely missing — applying default value of 2")
+        # Ensure expected model features always exist and provide stable defaults
+        # for partially-populated studies. This keeps all rows in the dataset.
+        if "visit_count" not in merged.columns:
             merged["visit_count"] = 2
         else:
-            merged["visit_count"] = merged["visit_count"].fillna(2)
+            merged["visit_count"] = pd.to_numeric(merged["visit_count"], errors="coerce").fillna(2)
+
+        if "eligibility_complexity" not in merged.columns:
+            merged["eligibility_complexity"] = 1.0
+        else:
+            merged["eligibility_complexity"] = pd.to_numeric(
+                merged["eligibility_complexity"],
+                errors="coerce",
+            ).fillna(1.0)
+
         return merged

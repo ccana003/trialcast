@@ -66,41 +66,38 @@ class RecruitmentModelTrainer:
         contacted = pd.to_numeric(out["patients_contacted"], errors="coerce")
         enrolled = pd.to_numeric(out["participants_enrolled"], errors="coerce")
 
-        # Enrollment probability
-        out["enrollment_probability"] = np.where(
-            contacted > 0,
+        # Enrollment probability:
+        # - Use observed enrolled/contacted when available and valid.
+        # - Otherwise fall back to a conservative default so rows are retained.
+        enrollment_probability = np.where(
+            (contacted > 0) & enrolled.notna(),
             enrolled / contacted,
-            np.nan,
+            0.2,
         )
+        out["enrollment_probability"] = pd.Series(enrollment_probability, index=out.index).clip(lower=0.05, upper=0.9)
 
-        # Keep probabilities in a realistic range for MVP stability
-        out["enrollment_probability"] = out["enrollment_probability"].clip(lower=0.01, upper=0.95)
-
-        # Recruitment duration in months
+        # Recruitment duration in months:
+        # - Compute from dates where available.
+        # - Use a default one-year duration when dates are missing or invalid.
         duration_months = (
             pd.to_datetime(out["recruitment_end_date"], errors="coerce")
             - pd.to_datetime(out["recruitment_start_date"], errors="coerce")
         ).dt.days / 30.44
+        duration_months = duration_months.where(duration_months > 0, np.nan).fillna(12.0)
 
         out["recruitment_duration_months"] = duration_months
 
-        # Accrual rate
-        out["expected_accrual_rate"] = np.where(
-            duration_months > 0,
+        # Expected accrual rate:
+        # - Use observed enrolled/duration where available.
+        # - Fall back to 2 participants/month for incomplete records.
+        expected_accrual_rate = np.where(
+            enrolled.notna() & (duration_months > 0),
             enrolled / duration_months,
-            np.nan,
+            2.0,
         )
+        out["expected_accrual_rate"] = pd.Series(expected_accrual_rate, index=out.index).clip(lower=1.0, upper=50.0)
 
-        # Keep accrual rates in a realistic MVP range
-        out["expected_accrual_rate"] = out["expected_accrual_rate"].clip(lower=1.0, upper=50)
-
-        # Remove unrealistic or bad rows
-        out = out[
-            (out["participants_enrolled"] > 0) &
-            (out["patients_contacted"] > 0) &
-            (out["recruitment_duration_months"] > 1) &
-            (out["recruitment_duration_months"] < 60)
-        ]
+        # Intentionally keep all rows; downstream models already include imputers.
         return out
     
 
