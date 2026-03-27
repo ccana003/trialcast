@@ -10,7 +10,6 @@ SRC_ROOT = CURRENT_FILE.parents[2]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-import pandas as pd
 import streamlit as st
 
 from recruitment_feasibility.data_ingestion.loader import DataIngestionService
@@ -26,6 +25,53 @@ REPO_ROOT = CURRENT_FILE.parents[3]
 DATA_DIR = REPO_ROOT / "data"
 
 
+def _difficulty_label(duration_months: float) -> str:
+    """Classify recruitment difficulty from projected duration."""
+    if duration_months < 36:
+        return "Low"
+    if duration_months <= 84:
+        return "Moderate"
+    return "High"
+
+
+def _driver_messages(proposal: dict[str, object]) -> list[str]:
+    """Summarize key input factors that influence recruitment performance."""
+    visit_count = float(proposal.get("visit_count", 2) or 2)
+    complexity = float(proposal.get("eligibility_complexity", 1.0) or 1.0)
+    disease_category = str(proposal.get("disease_category", "unknown"))
+    local_sample = proposal.get("local_sample")
+    national_sample = proposal.get("national_sample")
+
+    local_text = "N/A" if local_sample in (None, "") else f"{int(float(local_sample))}"
+    national_text = "N/A" if national_sample in (None, "") else f"{int(float(national_sample))}"
+
+    return [
+        f"Visit burden: {int(visit_count)} visits",
+        f"Eligibility complexity: {complexity:.1f}",
+        f"Disease category: {disease_category}",
+        f"Sample size context: local={local_text}, national={national_text}",
+    ]
+
+
+def _recommendations(proposal: dict[str, object]) -> list[str]:
+    """Generate actionable recommendations from scenario features."""
+    recommendations: list[str] = []
+
+    if float(proposal.get("visit_count", 2) or 2) > 2:
+        recommendations.append("Reduce visit_count where clinically acceptable to improve accrual pace.")
+    if float(proposal.get("eligibility_complexity", 1.0) or 1.0) > 1.5:
+        recommendations.append("Lower eligibility complexity to improve enrollment probability.")
+
+    local_sample = proposal.get("local_sample")
+    if local_sample not in (None, "") and float(local_sample) >= 120:
+        recommendations.append("Consider increasing site count because local_sample target is high for one site.")
+
+    if not recommendations:
+        recommendations.append("Current design appears balanced; monitor early screening-to-enrollment conversion.")
+
+    return recommendations
+
+
 @st.cache_resource(show_spinner=False)
 def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimulator:
     """Load data, extract features, train models, and return simulator."""
@@ -36,21 +82,12 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
     sources = ingestion.load_all_sources()
     merged = ingestion.build_merged_training_frame(sources)
 
-    # Use merged directly (already contains parsed features)
+    # Use merged directly (already contains parsed features).
     training_df = merged.copy()
-
-    # Final safety: remove duplicate columns
     training_df = training_df.loc[:, ~training_df.columns.duplicated()]
 
-    # Add target variables
+    # Add CTMS-informed target variables while preserving all studies.
     training_df = trainer.add_target_metrics(training_df)
-    print(training_df["enrollment_probability"].describe())
-    print(training_df["expected_accrual_rate"].describe())
-    print("ENROLLMENT PROBABILITY:")
-    print(training_df["enrollment_probability"].describe())
-
-    print("\nACCRUAL RATE:")
-    print(training_df["expected_accrual_rate"].describe())
 
     common_features = [
         "study_type",
@@ -63,6 +100,8 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         "has_feasibility_data",
         "has_recruitment_data",
         "has_protocol_data",
+        "local_sample",
+        "national_sample",
     ]
 
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
@@ -89,17 +128,30 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
 
 def _data_signature() -> tuple[float, ...]:
     """Return a timestamp signature so cache refreshes when source data changes."""
-    return tuple(
-        (DATA_DIR / file_name).stat().st_mtime
-        for file_name in ["studies.csv", "feasibility_data.csv", "recruitment_data.csv", "protocol_data.csv"]
-    )
+    files = ["studies.csv", "feasibility_data.csv", "recruitment_data.csv", "protocol_data.csv", "ctms_data.csv"]
+    signature = []
+    for file_name in files:
+        file_path = DATA_DIR / file_name
+        if file_path.exists():
+            signature.append(file_path.stat().st_mtime)
+    return tuple(signature)
+
+
+def _render_result_block(title: str, result) -> None:
+    """Render compact metrics for a single scenario."""
+    st.markdown(f"### {title}")
+    st.metric("Enrollment probability", f"{result.predicted_enrollment_probability:.2%}")
+    st.metric("Contacts required", f"{result.estimated_contacts_required:,.0f}")
+    st.metric("Accrual rate", f"{result.expected_accrual_rate_per_month:.1f} participants/month")
+    st.metric("Duration", f"{result.estimated_recruitment_duration_months:.1f} months")
+    st.metric("Recruitment Difficulty Score", _difficulty_label(result.estimated_recruitment_duration_months))
 
 
 def render_app() -> None:
-    """Render the Streamlit user interface."""
+    """Render the Streamlit decision-support user interface."""
     st.set_page_config(page_title="Recruitment Feasibility Simulator", layout="wide")
-    st.title("Recruitment Feasibility and Simulation Platform")
-    st.caption("Prototype MVP using historical institutional recruitment data.")
+    st.title("Recruitment Feasibility Decision-Support Tool")
+    st.caption("Uses historical sources plus CTMS (Velos) fields for actionable planning insights.")
 
     try:
         with st.spinner("Loading historical data and training baseline models..."):
@@ -116,6 +168,7 @@ def render_app() -> None:
         target_enrollment = st.number_input("Target enrollment", min_value=1, value=150)
         default_visit_count = st.number_input("Fallback visit count", min_value=0, value=2)
         investigator_experience = st.number_input("Investigator experience (years)", min_value=0, value=5)
+        local_sample = st.number_input("Local sample target (site)", min_value=1, value=80)
 
     with col2:
         reviewer_concern = st.selectbox("Recruitment concern level", ["low", "medium", "high"])
@@ -123,6 +176,7 @@ def render_app() -> None:
             "Primary disease category override",
             ["hypertension", "diabetes", "oncology", "asthma", "mental_health", "other"],
         )
+        national_sample = st.number_input("National sample target (all sites)", min_value=1, value=450)
 
     st.markdown("### Step 1 — Paste eligibility criteria")
     eligibility_text = st.text_area(
@@ -143,8 +197,8 @@ def render_app() -> None:
 
     review_col1, review_col2 = st.columns(2)
     with review_col1:
-        min_age = st.number_input("Minimum age", min_value=0, value=int(editable.get("min_age") or 0))
-        max_age = st.number_input("Maximum age", min_value=0, value=int(editable.get("max_age") or 0))
+        st.number_input("Minimum age", min_value=0, value=int(editable.get("min_age") or 0))
+        st.number_input("Maximum age", min_value=0, value=int(editable.get("max_age") or 0))
         visit_count = st.number_input(
             "Visit count",
             min_value=0,
@@ -170,7 +224,18 @@ def render_app() -> None:
             step=0.1,
         )
 
-    if st.button("Step 4 — Run feasibility simulation"):
+    st.markdown("### Step 4 — Scenario comparison controls")
+    compare_enabled = st.checkbox("Enable scenario comparison", value=True)
+    modified_visit_count = st.number_input("Modified scenario visit_count", min_value=0, value=max(int(visit_count) - 1, 0))
+    modified_complexity = st.number_input(
+        "Modified scenario eligibility_complexity",
+        min_value=0.0,
+        max_value=10.0,
+        value=max(float(eligibility_complexity) - 0.2, 0.0),
+        step=0.1,
+    )
+
+    if st.button("Step 5 — Run feasibility simulation"):
         proposal = {
             "study_type": study_type,
             "investigator_experience": investigator_experience,
@@ -182,19 +247,34 @@ def render_app() -> None:
             "has_feasibility_data": 1,
             "has_recruitment_data": 0,
             "has_protocol_data": 1,
+            "local_sample": local_sample,
+            "national_sample": national_sample,
         }
 
-        result = simulator.simulate(proposal, target_enrollment=int(target_enrollment))
+        result_current = simulator.simulate(proposal, target_enrollment=int(target_enrollment))
 
         st.markdown("## Simulation Output")
-        st.metric("Recruitment Risk", result.recruitment_risk)
-        st.metric("Predicted enrollment probability", f"{result.predicted_enrollment_probability:.2%}")
-        st.metric("Estimated contacts required", f"{result.estimated_contacts_required:,.0f}")
-        st.metric("Expected accrual rate", f"{result.expected_accrual_rate_per_month:.1f} participants/month")
-        st.metric(
-            "Estimated recruitment duration",
-            f"{result.estimated_recruitment_duration_months:.1f} months",
-        )
+        if compare_enabled:
+            modified_proposal = proposal.copy()
+            modified_proposal["visit_count"] = modified_visit_count
+            modified_proposal["eligibility_complexity"] = modified_complexity
+            result_modified = simulator.simulate(modified_proposal, target_enrollment=int(target_enrollment))
+
+            left, right = st.columns(2)
+            with left:
+                _render_result_block("Current Scenario", result_current)
+            with right:
+                _render_result_block("Modified Scenario", result_modified)
+        else:
+            _render_result_block("Current Scenario", result_current)
+
+        st.markdown("## Key Drivers")
+        for msg in _driver_messages(proposal):
+            st.write(f"- {msg}")
+
+        st.markdown("## Recommendations")
+        for suggestion in _recommendations(proposal):
+            st.write(f"- {suggestion}")
 
 
 if __name__ == "__main__":

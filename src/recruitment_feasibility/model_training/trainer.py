@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNet
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -60,46 +60,52 @@ class RecruitmentModelTrainer:
 
     @staticmethod
     def add_target_metrics(df: pd.DataFrame) -> pd.DataFrame:
-        """Create derived recruitment targets used by downstream models."""
+        """Create CTMS-informed recruitment targets while preserving all rows."""
         out = df.copy()
 
-        contacted = pd.to_numeric(out["patients_contacted"], errors="coerce")
-        enrolled = pd.to_numeric(out["participants_enrolled"], errors="coerce")
+        def pick_column(candidates: List[str]) -> pd.Series:
+            for col in candidates:
+                if col in out.columns:
+                    return out[col]
+            return pd.Series(np.nan, index=out.index)
 
-        # Enrollment probability:
-        # - Use observed enrolled/contacted when available and valid.
-        # - Otherwise fall back to a conservative default so rows are retained.
-        enrollment_probability = np.where(
-            (contacted > 0) & enrolled.notna(),
-            enrolled / contacted,
-            0.2,
+        # CTMS first, then legacy fallback names to keep backward compatibility.
+        accrued = pd.to_numeric(
+            pick_column(["ctms_accrued", "Accrued", "participants_enrolled"]),
+            errors="coerce",
         )
-        out["enrollment_probability"] = pd.Series(enrollment_probability, index=out.index).clip(lower=0.05, upper=0.9)
+        local_sample = pd.to_numeric(pick_column(["local_sample"]), errors="coerce")
+        disease = pick_column(["disease_category", "Disease Site(S)"]).fillna("unknown").astype(str)
 
-        # Recruitment duration in months:
-        # - Compute from dates where available.
-        # - Use a default one-year duration when dates are missing or invalid.
-        duration_months = (
-            pd.to_datetime(out["recruitment_end_date"], errors="coerce")
-            - pd.to_datetime(out["recruitment_start_date"], errors="coerce")
-        ).dt.days / 30.44
-        duration_months = duration_months.where(duration_months > 0, np.nan).fillna(12.0)
+        # Enrollment probability = accrued / local_sample when available.
+        enrollment_probability = (accrued / local_sample).replace([np.inf, -np.inf], np.nan)
+        disease_enroll_medians = enrollment_probability.groupby(disease).transform("median")
+        enrollment_probability = enrollment_probability.fillna(disease_enroll_medians).fillna(0.2)
+        out["enrollment_probability"] = enrollment_probability.clip(lower=0.05, upper=0.9)
 
-        out["recruitment_duration_months"] = duration_months
-
-        # Expected accrual rate:
-        # - Use observed enrolled/duration where available.
-        # - Fall back to 2 participants/month for incomplete records.
-        expected_accrual_rate = np.where(
-            enrolled.notna() & (duration_months > 0),
-            enrolled / duration_months,
-            2.0,
+        # Recruitment duration = CTMS closed - active enrollment dates.
+        closed_to_enrollment_date = pd.to_datetime(
+            pick_column(["ctms_closed_to_enrollment_date", "Closed to Enrollment Date", "recruitment_end_date"]),
+            errors="coerce",
         )
-        out["expected_accrual_rate"] = pd.Series(expected_accrual_rate, index=out.index).clip(lower=1.0, upper=50.0)
+        active_enrolling_date = pd.to_datetime(
+            pick_column(["ctms_active_enrolling_date", "Active Enrolling Date", "recruitment_start_date"]),
+            errors="coerce",
+        )
+        duration_months = ((closed_to_enrollment_date - active_enrolling_date).dt.days / 30.44).where(
+            lambda s: s > 0,
+            np.nan,
+        )
+        out["recruitment_duration_months"] = duration_months.fillna(12.0)
 
-        # Intentionally keep all rows; downstream models already include imputers.
+        # Expected accrual rate = accrued / recruitment duration.
+        expected_accrual_rate = (accrued / out["recruitment_duration_months"]).replace([np.inf, -np.inf], np.nan)
+        disease_accrual_medians = expected_accrual_rate.groupby(disease).transform("median")
+        expected_accrual_rate = expected_accrual_rate.fillna(disease_accrual_medians).fillna(3.0)
+        out["expected_accrual_rate"] = expected_accrual_rate.clip(lower=1.5, upper=50.0)
+
+        # Keep every row; models will learn with imputation and full coverage.
         return out
-    
 
     def build_pipeline(
         self,
@@ -128,7 +134,12 @@ class RecruitmentModelTrainer:
 
         model_map = {
             "elasticnet": ElasticNet(alpha=0.05, l1_ratio=0.5, random_state=self.random_state, max_iter=5000),
-            "gradient_boosting": GradientBoostingRegressor(random_state=self.random_state),
+            "random_forest": RandomForestRegressor(
+                n_estimators=300,
+                min_samples_leaf=2,
+                random_state=self.random_state,
+                n_jobs=-1,
+            ),
         }
 
         if model_name not in model_map:
@@ -210,10 +221,10 @@ class RecruitmentModelTrainer:
 
         candidates = {
             "elasticnet": self.build_pipeline(numeric_features, categorical_features, model_name="elasticnet"),
-            "gradient_boosting": self.build_pipeline(
+            "random_forest": self.build_pipeline(
                 numeric_features,
                 categorical_features,
-                model_name="gradient_boosting",
+                model_name="random_forest",
             ),
         }
 

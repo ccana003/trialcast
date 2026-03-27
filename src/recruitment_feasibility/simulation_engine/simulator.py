@@ -37,9 +37,9 @@ class RecruitmentSimulator:
             )[0]
         )
 
-        # Apply realistic minimum/maximum bounds to model outputs.
+        # Apply product-level bounds to keep outputs realistic.
         enrollment_prob = float(np.clip(enrollment_prob, 0.05, 0.95))
-        accrual_rate = max(2.0, accrual_rate)
+        accrual_rate = max(1.5, accrual_rate)
 
         # Domain-informed adjustments:
         # - fewer visits generally improves participation cadence;
@@ -59,8 +59,18 @@ class RecruitmentSimulator:
         if complexity > 1.5:
             accrual_rate -= 0.5
 
+        # Scale effects:
+        # - large national studies compete for participants and may dilute local pace;
+        # - small local targets are often easier to complete.
+        national_sample = pd.to_numeric(pd.Series([proposal_features.get("national_sample")]), errors="coerce").iloc[0]
+        local_sample = pd.to_numeric(pd.Series([proposal_features.get("local_sample")]), errors="coerce").iloc[0]
+        if not pd.isna(national_sample) and float(national_sample) >= 500:
+            accrual_rate -= 0.3
+        if not pd.isna(local_sample) and float(local_sample) <= 40:
+            accrual_rate += 0.3
+
         # Final safety floor required by product constraints.
-        accrual_rate = max(2.0, accrual_rate)
+        accrual_rate = max(1.5, accrual_rate)
 
         # ============================
         # 📊 Derived metrics
@@ -92,7 +102,7 @@ class RecruitmentSimulator:
     ) -> Dict[str, float]:
         """Run Monte Carlo simulations for stochastic month-by-month recruitment."""
         enrollment_prob = float(np.clip(predicted_enrollment_probability, 0.05, 0.95))
-        accrual_rate = max(2.0, float(predicted_accrual_rate))
+        accrual_rate = max(1.5, float(predicted_accrual_rate))
 
         expected_contacts = max(1.0, accrual_rate / enrollment_prob)
         rng = np.random.default_rng(seed=random_state)
