@@ -122,3 +122,48 @@ def test_simulate_distribution_returns_summary_metrics() -> None:
     }
     assert 0.0 <= distribution["probability_within_12_months"] <= 1.0
     assert 0.0 <= distribution["probability_within_24_months"] <= 1.0
+
+
+def test_simulate_changes_contacts_when_visit_burden_changes() -> None:
+    trainer = RecruitmentModelTrainer(random_state=1)
+    df = trainer.add_target_metrics(_build_training_df())
+
+    features = [
+        "study_type",
+        "investigator_experience",
+        "reviewer_concern_recruitment",
+        "visit_count",
+        "eligibility_complexity",
+        "disease_category",
+        "healthy_volunteer_flag",
+        "has_feasibility_data",
+        "has_recruitment_data",
+        "has_protocol_data",
+    ]
+    categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
+
+    enrollment_model = trainer.train(df, feature_columns=features, target_column="enrollment_probability", categorical_features=categorical)
+    accrual_model = trainer.train(df, feature_columns=features, target_column="expected_accrual_rate", categorical_features=categorical)
+
+    simulator = RecruitmentSimulator(enrollment_model=enrollment_model, accrual_model=accrual_model)
+
+    base_proposal = {
+        "study_type": "interventional",
+        "investigator_experience": 6,
+        "reviewer_concern_recruitment": "medium",
+        "visit_count": 2,
+        "eligibility_complexity": 1.0,
+        "disease_category": "hypertension",
+        "healthy_volunteer_flag": 0,
+        "has_feasibility_data": 1,
+        "has_recruitment_data": 1,
+        "has_protocol_data": 1,
+    }
+
+    modified_proposal = dict(base_proposal, visit_count=6, eligibility_complexity=2.0)
+
+    current = simulator.simulate(base_proposal, target_enrollment=120)
+    modified = simulator.simulate(modified_proposal, target_enrollment=120)
+
+    assert current.predicted_enrollment_probability > modified.predicted_enrollment_probability
+    assert current.estimated_contacts_required < modified.estimated_contacts_required
