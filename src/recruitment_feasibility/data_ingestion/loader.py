@@ -26,12 +26,19 @@ class DataIngestionService:
 
     def load_all_sources(self) -> Dict[str, pd.DataFrame]:
         """Load all known source tables for the MVP prototype."""
-        return {
+        sources = {
             "studies": self.load_csv("studies.csv"),
             "feasibility_data": self.load_csv("feasibility_data.csv"),
             "recruitment_data": self.load_csv("recruitment_data.csv"),
             "protocol_data": self.load_csv("protocol_data.csv"),
         }
+        ctms_file = self.data_dir / "ctms_data.csv"
+        if ctms_file.exists():
+            sources["ctms_data"] = self.load_csv("ctms_data.csv")
+        else:
+            # Keep ingestion resilient when CTMS extract is not yet provisioned.
+            sources["ctms_data"] = pd.DataFrame()
+        return sources
 
     def build_merged_training_frame(self, sources: Dict[str, pd.DataFrame]) -> pd.DataFrame:
         """Create a denormalized study-level frame using left joins from studies.
@@ -48,6 +55,50 @@ class DataIngestionService:
             on="study_id",
             how="left",
         )
+        ctms = sources.get("ctms_data", pd.DataFrame()).copy()
+        if not ctms.empty:
+            ctms = ctms.rename(
+                columns={
+                    "Accrued": "ctms_accrued",
+                    "Active Enrolling Date": "ctms_active_enrolling_date",
+                    "Closed to Enrollment Date": "ctms_closed_to_enrollment_date",
+                    "Disease Site(S)": "disease_category",
+                }
+            )
+
+            if "local_sample" not in ctms.columns:
+                ctms["local_sample"] = pd.NA
+            if "national_sample" not in ctms.columns:
+                ctms["national_sample"] = pd.NA
+
+            ctms_keep_columns = [
+                col
+                for col in [
+                    "study_id",
+                    "ctms_accrued",
+                    "ctms_active_enrolling_date",
+                    "ctms_closed_to_enrollment_date",
+                    "disease_category",
+                    "local_sample",
+                    "national_sample",
+                ]
+                if col in ctms.columns
+            ]
+            if "disease_category" in merged.columns and "disease_category" in ctms_keep_columns:
+                ctms = ctms.rename(columns={"disease_category": "ctms_disease_category"})
+                ctms_keep_columns = ["ctms_disease_category" if col == "disease_category" else col for col in ctms_keep_columns]
+
+            merged = merged.merge(ctms[ctms_keep_columns], on="study_id", how="left")
+
+            if "ctms_disease_category" in merged.columns:
+                merged["disease_category"] = merged.get("disease_category").fillna(merged["ctms_disease_category"])
+                merged = merged.drop(columns=["ctms_disease_category"])
+        else:
+            merged["ctms_accrued"] = pd.NA
+            merged["ctms_active_enrolling_date"] = pd.NA
+            merged["ctms_closed_to_enrollment_date"] = pd.NA
+            merged["local_sample"] = pd.NA
+            merged["national_sample"] = pd.NA
 
         merged["has_feasibility_data"] = merged["study_id"].isin(sources["feasibility_data"]["study_id"]).astype(int)
         merged["has_recruitment_data"] = merged["study_id"].isin(sources["recruitment_data"]["study_id"]).astype(int)
@@ -82,5 +133,11 @@ class DataIngestionService:
                 merged["eligibility_complexity"],
                 errors="coerce",
             ).fillna(1.0)
+
+        # Ensure CTMS planning fields are always present and numeric where applicable.
+        for sample_col in ["local_sample", "national_sample", "ctms_accrued"]:
+            if sample_col not in merged.columns:
+                merged[sample_col] = pd.NA
+            merged[sample_col] = pd.to_numeric(merged[sample_col], errors="coerce")
 
         return merged
