@@ -42,22 +42,26 @@ class RecruitmentSimulator:
         accrual_rate = max(1.5, accrual_rate)
 
         # Domain-informed adjustments:
-        # - fewer visits generally improves participation cadence;
-        # - higher eligibility complexity generally slows accrual.
+        # - fewer visits generally improves participation cadence and conversion;
+        # - higher eligibility complexity generally slows accrual and conversion.
         visit_count = pd.to_numeric(pd.Series([proposal_features.get("visit_count", 2)]), errors="coerce").iloc[0]
         complexity = pd.to_numeric(pd.Series([proposal_features.get("eligibility_complexity", 1.0)]), errors="coerce").iloc[0]
         visit_count = 2 if pd.isna(visit_count) else float(visit_count)
         complexity = 1.0 if pd.isna(complexity) else float(complexity)
 
-        # Fewer visits -> faster recruitment; many visits -> slower recruitment.
+        # Fewer visits -> faster recruitment and better conversion;
+        # many visits -> slower recruitment and lower conversion.
         if visit_count <= 2:
             accrual_rate += 0.5
+            enrollment_prob += 0.02
         elif visit_count >= 5:
             accrual_rate -= 0.5
+            enrollment_prob -= 0.02
 
-        # Higher complexity -> slower recruitment.
+        # Higher complexity -> slower recruitment and lower conversion.
         if complexity > 1.5:
             accrual_rate -= 0.5
+            enrollment_prob -= 0.02
 
         # Scale effects:
         # - large national studies compete for participants and may dilute local pace;
@@ -69,8 +73,9 @@ class RecruitmentSimulator:
         if not pd.isna(local_sample) and float(local_sample) <= 40:
             accrual_rate += 0.3
 
-        # Final safety floor required by product constraints.
+        # Final safety constraints required by product constraints.
         accrual_rate = max(1.5, accrual_rate)
+        enrollment_prob = float(np.clip(enrollment_prob, 0.05, 0.95))
 
         # ============================
         # 📊 Derived metrics
