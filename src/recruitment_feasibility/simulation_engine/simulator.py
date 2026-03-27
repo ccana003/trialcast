@@ -23,16 +23,53 @@ class RecruitmentSimulator:
         """Generate recruitment projections from trained models and proposal inputs."""
         feature_frame = pd.DataFrame([proposal_features])
 
+        # --- Predict enrollment probability ---
         enrollment_prob = float(
-            self.enrollment_model.model.predict(feature_frame[self.enrollment_model.feature_columns])[0]
+            self.enrollment_model.model.predict(
+                feature_frame[self.enrollment_model.feature_columns]
+            )[0]
         )
-        enrollment_prob = float(np.clip(enrollment_prob, 0.001, 0.95))
 
-        accrual_rate = float(self.accrual_model.model.predict(feature_frame[self.accrual_model.feature_columns])[0])
-        accrual_rate = max(0.1, accrual_rate)
+        # --- Predict accrual rate ---
+        accrual_rate = float(
+            self.accrual_model.model.predict(
+                feature_frame[self.accrual_model.feature_columns]
+            )[0]
+        )
 
+        # ============================
+        # 🔧 FIX 1: Realistic minimums
+        # ============================
+        enrollment_prob = float(np.clip(enrollment_prob, 0.05, 0.95))
+        accrual_rate = max(1.5, accrual_rate)
+
+        # ============================
+        # 🔧 FIX 2: Simple domain logic
+        # ============================
+        visit_count = proposal_features.get("visit_count", 2)
+        complexity = proposal_features.get("eligibility_complexity", 1)
+
+        # Fewer visits → faster recruitment
+        if visit_count <= 2:
+            accrual_rate += 0.5
+        elif visit_count >= 5:
+            accrual_rate -= 0.5
+
+        # Higher complexity → slower recruitment
+        if complexity > 1.5:
+            accrual_rate -= 0.5
+
+        # Final safety floor
+        accrual_rate = max(1.0, accrual_rate)
+
+        # ============================
+        # 📊 Derived metrics
+        # ============================
         contacts_required = target_enrollment / enrollment_prob
         duration_months = target_enrollment / accrual_rate
+
+        # Optional cap (prevents absurd outputs)
+        duration_months = min(duration_months, 120)
 
         risk = self._risk_label(enrollment_prob)
 
@@ -54,8 +91,8 @@ class RecruitmentSimulator:
         random_state: int = 42,
     ) -> Dict[str, float]:
         """Run Monte Carlo simulations for stochastic month-by-month recruitment."""
-        enrollment_prob = float(np.clip(predicted_enrollment_probability, 0.001, 0.95))
-        accrual_rate = max(0.1, float(predicted_accrual_rate))
+        enrollment_prob = float(np.clip(predicted_enrollment_probability, 0.05, 0.95))
+        accrual_rate = max(1.0, float(predicted_accrual_rate))
 
         expected_contacts = max(1.0, accrual_rate / enrollment_prob)
         rng = np.random.default_rng(seed=random_state)

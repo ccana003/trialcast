@@ -1,6 +1,7 @@
 """Data ingestion utilities for loading and integrating institutional datasets."""
-
 from __future__ import annotations
+
+from recruitment_feasibility.feature_extraction.eligibility_parser import EligibilityFeatureExtractor
 
 from pathlib import Path
 from typing import Dict
@@ -37,6 +38,7 @@ class DataIngestionService:
 
         Missing values are preserved by design to support partial records.
         """
+        extractor = EligibilityFeatureExtractor()
         merged = sources["studies"].copy()
 
         merged = merged.merge(sources["feasibility_data"], on="study_id", how="left")
@@ -51,4 +53,34 @@ class DataIngestionService:
         merged["has_recruitment_data"] = merged["study_id"].isin(sources["recruitment_data"]["study_id"]).astype(int)
         merged["has_protocol_data"] = merged["eligibility_criteria_text"].notna().astype(int)
 
+        # --- Extract eligibility features ---
+        feature_df = merged["eligibility_criteria_text"].apply(
+            lambda x: extractor.parse_to_dict(x)
+        )
+
+        feature_df = pd.DataFrame(list(feature_df))
+
+        # Drop existing columns if they already exist (prevents duplicates)
+        merged = merged.drop(columns=[col for col in feature_df.columns if col in merged.columns])
+
+        merged = pd.concat([merged, feature_df], axis=1)
+
+        # --- FINAL SAFETY: ensure no duplicates anywhere ---
+        merged = merged.loc[:, ~merged.columns.duplicated()]
+
+        # --- Debug (temporary) ---
+        print("Visit count summary:")
+        print(merged["visit_count"].describe())
+        print("Missing visit_count:", merged["visit_count"].isna().sum())
+
+        print("DUPLICATE COLUMNS:")
+        print(merged.columns[merged.columns.duplicated()])
+        print("Sample eligibility text:")
+        print(merged["eligibility_criteria_text"].head(5))
+        # --- FIX: ensure visit_count exists ---
+        if merged["visit_count"].isna().all():
+            print("⚠️ visit_count is completely missing — applying default value of 2")
+            merged["visit_count"] = 2
+        else:
+            merged["visit_count"] = merged["visit_count"].fillna(2)
         return merged

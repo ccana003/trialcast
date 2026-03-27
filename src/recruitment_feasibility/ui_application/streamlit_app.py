@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-
 CURRENT_FILE = Path(__file__).resolve()
 SRC_ROOT = CURRENT_FILE.parents[2]
 if str(SRC_ROOT) not in sys.path:
@@ -32,17 +31,26 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
     """Load data, extract features, train models, and return simulator."""
     _ = data_signature
     ingestion = DataIngestionService(DATA_DIR)
-    extractor = EligibilityFeatureExtractor()
     trainer = RecruitmentModelTrainer()
 
     sources = ingestion.load_all_sources()
     merged = ingestion.build_merged_training_frame(sources)
 
-    feature_df = pd.json_normalize(
-        merged["eligibility_criteria_text"].apply(extractor.parse_to_dict),
-    )
-    training_df = pd.concat([merged, feature_df], axis=1)
+    # Use merged directly (already contains parsed features)
+    training_df = merged.copy()
+
+    # Final safety: remove duplicate columns
+    training_df = training_df.loc[:, ~training_df.columns.duplicated()]
+
+    # Add target variables
     training_df = trainer.add_target_metrics(training_df)
+    print(training_df["enrollment_probability"].describe())
+    print(training_df["expected_accrual_rate"].describe())
+    print("ENROLLMENT PROBABILITY:")
+    print(training_df["enrollment_probability"].describe())
+
+    print("\nACCRUAL RATE:")
+    print(training_df["expected_accrual_rate"].describe())
 
     common_features = [
         "study_type",
@@ -56,6 +64,7 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         "has_recruitment_data",
         "has_protocol_data",
     ]
+
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
 
     enrollment_model = trainer.train(
@@ -64,6 +73,7 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         target_column="enrollment_probability",
         categorical_features=categorical,
     )
+
     accrual_model = trainer.train(
         training_df,
         feature_columns=common_features,
@@ -71,7 +81,10 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         categorical_features=categorical,
     )
 
-    return RecruitmentSimulator(enrollment_model=enrollment_model, accrual_model=accrual_model)
+    return RecruitmentSimulator(
+        enrollment_model=enrollment_model,
+        accrual_model=accrual_model,
+    )
 
 
 def _data_signature() -> tuple[float, ...]:
@@ -79,86 +92,6 @@ def _data_signature() -> tuple[float, ...]:
     return tuple(
         (DATA_DIR / file_name).stat().st_mtime
         for file_name in ["studies.csv", "feasibility_data.csv", "recruitment_data.csv", "protocol_data.csv"]
-    )
-
-
-def _render_model_quality(simulator: RecruitmentSimulator) -> None:
-    st.subheader("Model quality")
-
-    enrollment_eval = simulator.enrollment_model.evaluation
-    accrual_eval = simulator.accrual_model.evaluation
-
-    st.caption(
-        "Models are cross-validated and compared against a fold-wise mean-target baseline. "
-        f"Selected models: enrollment={simulator.enrollment_model.selected_model_name}, "
-        f"accrual={simulator.accrual_model.selected_model_name}."
-    )
-
-    quality_df = pd.DataFrame(
-        [
-            {
-                "target": "enrollment_probability",
-                "train_rows": enrollment_eval.train_rows,
-                "validation_rows": enrollment_eval.validation_rows,
-                "model_mae": enrollment_eval.model_mae,
-                "baseline_mae": enrollment_eval.baseline_mae,
-                "model_rmse": enrollment_eval.model_rmse,
-                "baseline_rmse": enrollment_eval.baseline_rmse,
-                "model_r2": enrollment_eval.model_r2,
-                "baseline_r2": enrollment_eval.baseline_r2,
-            },
-            {
-                "target": "expected_accrual_rate",
-                "train_rows": accrual_eval.train_rows,
-                "validation_rows": accrual_eval.validation_rows,
-                "model_mae": accrual_eval.model_mae,
-                "baseline_mae": accrual_eval.baseline_mae,
-                "model_rmse": accrual_eval.model_rmse,
-                "baseline_rmse": accrual_eval.baseline_rmse,
-                "model_r2": accrual_eval.model_r2,
-                "baseline_r2": accrual_eval.baseline_r2,
-            },
-        ]
-    )
-    st.dataframe(quality_df, use_container_width=True)
-
-    st.caption(
-        "Data ranges: "
-        f"Enrollment probability [{enrollment_eval.target_min:.4f}, {enrollment_eval.target_median:.4f}, {enrollment_eval.target_max:.4f}] | "
-        f"Accrual rate [{accrual_eval.target_min:.2f}, {accrual_eval.target_median:.2f}, {accrual_eval.target_max:.2f}]"
-    )
-
-
-def _render_model_explanation(simulator: RecruitmentSimulator) -> None:
-    st.subheader("Model explanation")
-    enrollment_artifact = simulator.enrollment_model
-
-    if enrollment_artifact.selected_model_name != "elasticnet":
-        st.info("Top driver explanation is available when the selected enrollment model is ElasticNet.")
-        return
-
-    model_pipeline = enrollment_artifact.model
-    preprocessor = model_pipeline.named_steps["preprocessor"]
-    model = model_pipeline.named_steps["model"]
-
-    feature_names = preprocessor.get_feature_names_out().tolist()
-    coefficients = pd.Series(model.coef_, index=feature_names)
-
-    top_positive = coefficients.sort_values(ascending=False).head(5)
-    top_negative = coefficients.sort_values(ascending=True).head(5)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("**Top positive drivers**")
-        st.dataframe(top_positive.rename("coefficient"))
-
-    with col2:
-        st.markdown("**Top negative drivers**")
-        st.dataframe(top_negative.rename("coefficient"))
-
-    st.caption(
-        "Positive coefficients increase predicted enrollment probability, while negative "
-        "coefficients decrease it, all else being equal."
     )
 
 
@@ -174,9 +107,6 @@ def render_app() -> None:
     except InsufficientTrainingDataError as exc:
         st.error(f"Unable to train model with current data: {exc}")
         st.stop()
-
-    _render_model_quality(simulator)
-    _render_model_explanation(simulator)
 
     st.subheader("Proposed Study Inputs")
     col1, col2 = st.columns(2)
@@ -201,6 +131,7 @@ def render_app() -> None:
     )
 
     extractor = EligibilityFeatureExtractor()
+
     if "editable_features" not in st.session_state:
         st.session_state.editable_features = extractor.parse_to_dict(eligibility_text)
 
@@ -224,11 +155,7 @@ def render_app() -> None:
         reviewed_disease = st.selectbox(
             "Disease category",
             ["hypertension", "diabetes", "oncology", "asthma", "mental_health", "other"],
-            index=["hypertension", "diabetes", "oncology", "asthma", "mental_health", "other"].index(
-                (editable.get("disease_category") or "other")
-                if (editable.get("disease_category") or "other") in ["hypertension", "diabetes", "oncology", "asthma", "mental_health", "other"]
-                else "other"
-            ),
+            index=0,
         )
         healthy_volunteer_flag = st.selectbox(
             "Healthy volunteer flag",
@@ -242,8 +169,6 @@ def render_app() -> None:
             value=float(editable.get("eligibility_complexity") or 1.0),
             step=0.1,
         )
-
-    st.caption(f"Reviewed age range: {min_age} to {max_age if max_age > 0 else 'not specified'}")
 
     if st.button("Step 4 — Run feasibility simulation"):
         proposal = {
@@ -260,12 +185,6 @@ def render_app() -> None:
         }
 
         result = simulator.simulate(proposal, target_enrollment=int(target_enrollment))
-        distribution = simulator.simulate_distribution(
-            predicted_enrollment_probability=result.predicted_enrollment_probability,
-            predicted_accrual_rate=result.expected_accrual_rate_per_month,
-            target_enrollment=int(target_enrollment),
-            n_simulations=1000,
-        )
 
         st.markdown("## Simulation Output")
         st.metric("Recruitment Risk", result.recruitment_risk)
@@ -276,13 +195,6 @@ def render_app() -> None:
             "Estimated recruitment duration",
             f"{result.estimated_recruitment_duration_months:.1f} months",
         )
-
-        st.markdown("### Monte Carlo recruitment outlook")
-        st.metric("Median duration", f"{distribution['median_duration_months']:.1f} months")
-        st.metric("P80 duration", f"{distribution['p80_duration_months']:.1f} months")
-        st.metric("P90 duration", f"{distribution['p90_duration_months']:.1f} months")
-        st.metric("Finish within 12 months", f"{distribution['probability_within_12_months']:.1%}")
-        st.metric("Finish within 24 months", f"{distribution['probability_within_24_months']:.1%}")
 
 
 if __name__ == "__main__":

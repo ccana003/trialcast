@@ -62,25 +62,47 @@ class RecruitmentModelTrainer:
     def add_target_metrics(df: pd.DataFrame) -> pd.DataFrame:
         """Create derived recruitment targets used by downstream models."""
         out = df.copy()
+
+        contacted = pd.to_numeric(out["patients_contacted"], errors="coerce")
+        enrolled = pd.to_numeric(out["participants_enrolled"], errors="coerce")
+
+        # Enrollment probability
         out["enrollment_probability"] = np.where(
-            out["patients_contacted"].fillna(0) > 0,
-            out["participants_enrolled"] / out["patients_contacted"],
+            contacted > 0,
+            enrolled / contacted,
             np.nan,
         )
 
+        # Keep probabilities in a realistic range for MVP stability
+        out["enrollment_probability"] = out["enrollment_probability"].clip(lower=0.01, upper=0.95)
+
+        # Recruitment duration in months
         duration_months = (
             pd.to_datetime(out["recruitment_end_date"], errors="coerce")
             - pd.to_datetime(out["recruitment_start_date"], errors="coerce")
         ).dt.days / 30.44
 
         out["recruitment_duration_months"] = duration_months
+
+        # Accrual rate
         out["expected_accrual_rate"] = np.where(
-            out["recruitment_duration_months"].fillna(0) > 0,
-            out["participants_enrolled"] / out["recruitment_duration_months"],
+            duration_months > 0,
+            enrolled / duration_months,
             np.nan,
         )
 
+        # Keep accrual rates in a realistic MVP range
+        out["expected_accrual_rate"] = out["expected_accrual_rate"].clip(lower=1.0, upper=50)
+
+        # Remove unrealistic or bad rows
+        out = out[
+            (out["participants_enrolled"] > 0) &
+            (out["patients_contacted"] > 0) &
+            (out["recruitment_duration_months"] > 1) &
+            (out["recruitment_duration_months"] < 60)
+        ]
         return out
+    
 
     def build_pipeline(
         self,

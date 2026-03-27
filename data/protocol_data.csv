@@ -1,9 +1,131 @@
 study_id,eligibility_criteria_text
-STUDY-001,"Adults age 40-75 with hypertension; requires 3 clinic visits and stable antihypertensive therapy."
-STUDY-002,"Adults aged 30-70 with type 2 diabetes and HbA1c > 7.0%; includes 4 visits over 12 months."
-STUDY-003,"Patients age >=18 with persistent asthma seen in community clinics; 2 study visits."
-STUDY-004,"Adults age 21-80 with solid tumor cancer receiving outpatient care; requires 5 clinic visits."
-STUDY-005,"Healthy volunteer participants age 18-55; 2 overnight visits in sleep lab."
-STUDY-006,"Adults age 18-65 with depression receiving telehealth services; 3 virtual visits."
-STUDY-007,"Adults age 35-79 with hypertension and medication nonadherence history; 4 clinic visits."
-STUDY-008,"Adults age 25-70 at high risk for diabetes in community prevention program; 3 visits."
+STUDY-3518,Study includes general adult population
+STUDY-3594,Study includes general adult population
+STUDY-2926,"Study includes drug intervention, device involvement"
+STUDY-8892,Study includes general adult population
+STUDY-3046,Study includes general adult population
+STUDY-4988,"Study includes drug intervention, cancer population"
+STUDY-5355,Study includes drug intervention
+STUDY-4501,Study includes cancer population
+STUDY-5045,Study includes general adult population
+STUDY-3736,Study includes cancer population
+STUDY-2748,Study includes device involvement
+STUDY-2763,Study includes general adult population
+STUDY-10477,Study includes general adult population
+STUDY-4555,Study includes general adult population
+STUDY-2788,Study includes general adult population
+STUDY-3966,Study includes general adult population
+STUDY-3969,Study includes device involvement
+STUDY-3048,Study includes general adult population
+STUDY-4898,Study includes general adult population
+STUDY-8960,Study includes general adult population
+STUDY-3102,Study includes general adult population
+STUDY-3182,Study includes general adult population
+STUDY-3448,Study includes general adult population
+STUDY-8311,Study includes device involvement
+STUDY-3967,Study includes general adult population
+STUDY-3206,"Study includes drug intervention, cancer population"
+STUDY-3485,Study includes general adult population
+STUDY-3324,Study includes drug intervention
+STUDY-3288,Study includes general adult population
+STUDY-5410,Study includes general adult population
+STUDY-4971,Study includes device involvement
+STUDY-5011,Study includes cancer population
+STUDY-5400,Study includes cancer population
+STUDY-5239,Study includes general adult population
+STUDY-4276,Study includes drug intervention
+STUDY-4362,Study includes general adult population
+STUDY-5685,Study includes general adult population
+STUDY-4363,Study includes general adult population
+STUDY-5871,Study includes cancer population
+STUDY-5277,Study includes drug intervention
+STUDY-5073,Study includes cancer population
+STUDY-4233,Study includes general adult population
+STUDY-4012,Study includes general adult population
+STUDY-4022,Study includes drug intervention
+STUDY-5304,Study includes general adult population
+STUDY-3900,Study includes cancer population
+STUDY-4457,Study includes drug intervention
+STUDY-4096,Study includes general adult population
+STUDY-5081,"Study includes drug intervention, device involvement"
+STUDY-4690,Study includes drug intervention
+STUDY-4967,Study includes cancer population
+STUDY-4648,Study includes drug intervention
+STUDY-4925,Study includes drug intervention
+STUDY-5554,Study includes drug intervention
+STUDY-4453,Study includes general adult population
+STUDY-4351,Study includes cancer population
+STUDY-4767,Study includes general adult population
+STUDY-4569,Study includes general adult population
+STUDY-4695,Study includes cancer population
+STUDY-6683,Study includes general adult population
+STUDY-4874,Study includes general adult population
+STUDY-5876,Study includes cancer population
+STUDY-5960,Study includes cancer population
+STUDY-5041,Study includes cancer population
+STUDY-6684,Study includes cancer population
+STUDY-5403,Study includes general adult population
+STUDY-5684,Study includes general adult population
+STUDY-5783,Study includes cancer population
+STUDY-5728,Study includes drug intervention
+STUDY-6397,Study includes general adult population
+STUDY-6258,Study includes drug intervention
+STUDY-8464,Study includes general adult population
+STUDY-5151,Study includes general adult population
+STUDY-8465,Study includes cancer population
+STUDY-5372,Study includes drug intervention
+STUDY-5373,Study includes drug intervention
+STUDY-5527,Study includes cancer population
+STUDY-6061,Study includes general adult population
+STUDY-5485,Study includes general adult population
+STUDY-5450,Study includes general adult population
+STUDY-5710,Study includes drug intervention
+STUDY-6142,Study includes cancer population
+STUDY-6127,Study includes general adult population
+STUDY-6781,Study includes cancer population
+STUDY-6045,Study includes general adult population
+STUDY-5949,Study includes general adult population
+STUDY-5796,Study includes general adult population
+STUDY-6343,Study includes general adult population
+STUDY-6046,Study includes general adult population
+STUDY-6717,Study includes general adult population
+STUDY-9236,Study includes general adult population
+STUDY-8734,Study includes cancer population
+STUDY-6716,Study includes cancer population
+STUDY-6494,Study includes cancer population
+STUDY-6334,Study includes general adult population
+STUDY-7786,Study includes cancer population
+STUDY-8800,Study includes cancer population
+STUDY-8256,Study includes drug intervention
+STUDY-8270,Study includes drug intervention
+STUDY-7061,Study includes general adult population
+STUDY-8905,Study includes general adult population
+STUDY-9981,Study includes cancer population
+STUDY-10383,Study includes cancer population
+STUDY-8934,Study includes drug intervention
+STUDY-8862,Study includes drug intervention
+STUDY-9049,Study includes drug intervention
+STUDY-8358,Study includes general adult population
+STUDY-8889,Study includes cancer population
+STUDY-9208,Study includes general adult population
+STUDY-10304,Study includes device involvement
+STUDY-9101,Study includes general adult population
+STUDY-8961,Study includes general adult population
+STUDY-9369,Study includes drug intervention
+STUDY-9831,Study includes cancer population
+STUDY-9808,Study includes drug intervention
+STUDY-9707,Study includes general adult population
+STUDY-9604,Study includes cancer population
+STUDY-11056,Study includes general adult population
+STUDY-9534,Study includes cancer population
+STUDY-11016,Study includes device involvement
+STUDY-10366,Study includes cancer population
+STUDY-10450,Study includes cancer population
+STUDY-10446,Study includes drug intervention
+STUDY-10303,Study includes general adult population
+STUDY-10887,Study includes drug intervention
+STUDY-10300,Study includes general adult population
+STUDY-9785,Study includes general adult population
+STUDY-10744,Study includes general adult population
+STUDY-11110,Study includes cancer population
+STUDY-11311,Study includes general adult population

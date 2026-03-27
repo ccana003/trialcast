@@ -113,14 +113,43 @@ class EligibilityFeatureExtractor:
         return None, None
 
     def _extract_visit_count(self, text: str) -> Optional[int]:
-        visit_match = VISIT_COUNT_PATTERN.search(text)
-        if not visit_match:
-            return None
+        text = text.lower()
 
-        token = visit_match.group(1).lower()
-        if token.isdigit():
-            return int(token)
-        return WORD_TO_NUMBER.get(token)
+        # --- Pattern 1: "X visits" (your current logic, but expanded)
+        matches = re.findall(
+            r"\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b\s+(?:on-site\s+|in-person\s+|clinic\s+|study\s+)?visits?\b",
+            text
+        )
+        if matches:
+            values = []
+            for token in matches:
+                if token.isdigit():
+                    values.append(int(token))
+                else:
+                    val = WORD_TO_NUMBER.get(token)
+                    if val:
+                        values.append(val)
+            if values:
+                return max(values)
+
+        # --- Pattern 2: "weekly visits for X weeks"
+        match = re.search(r"weekly visits? for (\d+)\s+weeks?", text)
+        if match:
+            return int(match.group(1))
+
+        # --- Pattern 3: "X weekly visits"
+        match = re.search(r"(\d+)\s+weekly visits?", text)
+        if match:
+            return int(match.group(1))
+
+        # --- Pattern 4: "over X weeks/months" (assume weekly visits)
+        match = re.search(r"over (\d+)\s+(weeks|months)", text)
+        if match:
+            num = int(match.group(1))
+            unit = match.group(2)
+            return num if unit == "weeks" else num * 4
+
+        return None
 
     def _extract_disease_category(self, lowered_text: str) -> Optional[str]:
         for keyword, category in KNOWN_DISEASE_KEYWORDS.items():
@@ -133,3 +162,18 @@ class EligibilityFeatureExtractor:
         token_count = len(text.split())
         conjunction_count = len(re.findall(r"\b(and|or|with|without)\b", text, re.IGNORECASE))
         return round(min(10.0, token_count / 20.0 + conjunction_count * 0.5), 2)
+
+if __name__ == "__main__":
+    extractor = EligibilityFeatureExtractor()
+
+    samples = [
+        "Participants will attend 6 clinic visits",
+        "Weekly visits for 8 weeks",
+        "Up to 5 study visits",
+        "Participants will have 12 visits over 6 months",
+        "No visits required"
+    ]
+
+    for s in samples:
+        result = extractor._extract_visit_count(s)
+        print(f"{s} -> {result}")
