@@ -27,7 +27,6 @@ DATA_DIR = REPO_ROOT / "data"
 
 
 def _difficulty_label(duration_months: float) -> str:
-    """Classify recruitment difficulty from projected duration."""
     if duration_months < 36:
         return "Low"
     if duration_months <= 84:
@@ -36,27 +35,30 @@ def _difficulty_label(duration_months: float) -> str:
 
 
 def _driver_messages(proposal: dict[str, object]) -> list[str]:
-    """Summarize key input factors that influence recruitment performance."""
     visit_count = float(proposal.get("visit_count", 2) or 2)
     complexity = float(proposal.get("eligibility_complexity", 1.0) or 1.0)
     disease_category = str(proposal.get("disease_category", "unknown"))
     local_sample = proposal.get("local_sample")
     national_sample = proposal.get("national_sample")
+    interest_rate = proposal.get("interest_rate")
 
     local_text = "N/A" if local_sample in (None, "") else f"{int(float(local_sample))}"
     national_text = "N/A" if national_sample in (None, "") else f"{int(float(national_sample))}"
+    interest_text = "N/A" if interest_rate in (None, "") else f"{float(interest_rate):.2%}"
 
     return [
         f"Visit burden: {int(visit_count)} visits",
         f"Eligibility complexity: {complexity:.1f}",
         f"Disease category: {disease_category}",
         f"Sample size context: local={local_text}, national={national_text}",
-        f"Recruitment ops: staff={int(proposal.get('recruitment_staff_count', 1))}, sites={int(proposal.get('site_count', 1))}, methods={int(proposal.get('recruitment_methods_count', 1))}",
+        f"Historical engagement proxy: {interest_text}",
+        f"Recruitment ops: staff={int(proposal.get('recruitment_staff_count', 1))}, "
+        f"sites={int(proposal.get('site_count', 1))}, "
+        f"methods={int(proposal.get('recruitment_methods_count', 1))}",
     ]
 
 
 def _recommendations(proposal: dict[str, object]) -> list[str]:
-    """Generate actionable recommendations from scenario features."""
     recommendations: list[str] = []
 
     if float(proposal.get("visit_count", 2) or 2) > 2:
@@ -81,7 +83,6 @@ def _recommendations(proposal: dict[str, object]) -> list[str]:
 
 @st.cache_resource(show_spinner=False)
 def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimulator:
-    """Load data, extract features, train models, and return simulator."""
     _ = data_signature
     ingestion = DataIngestionService(DATA_DIR)
     trainer = RecruitmentModelTrainer()
@@ -89,12 +90,47 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
     sources = ingestion.load_all_sources()
     merged = ingestion.build_merged_training_frame(sources)
 
-    # Use merged directly (already contains parsed features).
     training_df = merged.copy()
     training_df = training_df.loc[:, ~training_df.columns.duplicated()]
 
-    # Add CTMS-informed target variables while preserving all studies.
-    training_df = trainer.add_target_metrics(training_df)
+    # ===== HYBRID TARGET LOGIC =====
+    # CTMS-derived enrollment probability target
+    training_df["ctms_accrued"] = pd.to_numeric(training_df["ctms_accrued"], errors="coerce")
+    training_df["local_sample"] = pd.to_numeric(training_df["local_sample"], errors="coerce")
+    training_df["national_sample"] = pd.to_numeric(training_df["national_sample"], errors="coerce")
+
+    training_df["enrollment_probability"] = (
+        training_df["ctms_accrued"] /
+        training_df["local_sample"].replace(0, pd.NA)
+    )
+    training_df["enrollment_probability"] = training_df["enrollment_probability"].clip(0, 1)
+
+    # Accrual target from CTMS + recruitment window
+    training_df["recruitment_start_date"] = pd.to_datetime(training_df["recruitment_start_date"], errors="coerce")
+    training_df["recruitment_end_date"] = pd.to_datetime(training_df["recruitment_end_date"], errors="coerce")
+
+    training_df["recruitment_duration_months"] = (
+        (training_df["recruitment_end_date"] - training_df["recruitment_start_date"]).dt.days / 30
+    )
+    training_df["recruitment_duration_months"] = training_df["recruitment_duration_months"].clip(lower=0.5)
+
+    training_df["expected_accrual_rate"] = (
+        training_df["ctms_accrued"] /
+        training_df["recruitment_duration_months"].replace(0, pd.NA)
+    )
+    training_df["expected_accrual_rate"] = training_df["expected_accrual_rate"].clip(0, 50)
+
+    # interest_rate comes from CTC / recruitment_data and is now part of the feature set
+    training_df["interest_rate"] = pd.to_numeric(training_df["interest_rate"], errors="coerce")
+
+    # Keep rows with local targets for modeling
+    training_df = training_df[training_df["local_sample"] > 0].copy()
+
+    # Enrollment model should only use rows with valid CTMS-derived enrollment target
+    enrollment_training_df = training_df[training_df["enrollment_probability"].notna()].copy()
+
+    # Accrual model should only use rows with valid accrual target
+    accrual_training_df = training_df[training_df["expected_accrual_rate"].notna()].copy()
 
     common_features = [
         "study_type",
@@ -113,19 +149,20 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
         "dedicated_recruiter",
         "site_count",
         "recruitment_methods_count",
+        "interest_rate",
     ]
 
     categorical = ["study_type", "disease_category", "reviewer_concern_recruitment"]
 
     enrollment_model = trainer.train(
-        training_df,
+        enrollment_training_df,
         feature_columns=common_features,
         target_column="enrollment_probability",
         categorical_features=categorical,
     )
 
     accrual_model = trainer.train(
-        training_df,
+        accrual_training_df,
         feature_columns=common_features,
         target_column="expected_accrual_rate",
         categorical_features=categorical,
@@ -138,7 +175,6 @@ def build_training_assets(data_signature: tuple[float, ...]) -> RecruitmentSimul
 
 
 def _data_signature() -> tuple[float, ...]:
-    """Return a timestamp signature so cache refreshes when source data changes."""
     files = [
         "studies.csv",
         "feasibility_data.csv",
@@ -156,7 +192,6 @@ def _data_signature() -> tuple[float, ...]:
 
 
 def _render_result_block(title: str, result) -> None:
-    """Render compact metrics for a single scenario."""
     st.markdown(f"### {title}")
     st.metric("Enrollment probability", f"{result.predicted_enrollment_probability:.2%}")
     st.metric("Contacts required", f"{result.estimated_contacts_required:,.0f}")
@@ -166,10 +201,9 @@ def _render_result_block(title: str, result) -> None:
 
 
 def render_app() -> None:
-    """Render the Streamlit decision-support user interface."""
     st.set_page_config(page_title="Recruitment Feasibility Simulator", layout="wide")
     st.title("Recruitment Feasibility Decision-Support Tool")
-    st.caption("Uses historical sources plus CTMS (Velos) fields for actionable planning insights.")
+    st.caption("Uses CTC engagement plus CTMS targets/accrual for actionable planning insights.")
 
     try:
         with st.spinner("Loading historical data and training baseline models..."):
@@ -199,6 +233,13 @@ def render_app() -> None:
         national_sample = st.number_input("National sample target (all sites)", min_value=1, value=450)
         site_count = st.number_input("Site count", min_value=1, value=1)
         recruitment_methods_count = st.number_input("Recruitment methods count", min_value=1, value=1)
+        interest_rate = st.number_input(
+            "Historical engagement rate (Interested / Contacted)",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.20,
+            step=0.01,
+        )
 
     st.markdown("### Step 1 — Paste eligibility criteria")
     eligibility_text = st.text_area(
@@ -293,7 +334,7 @@ def render_app() -> None:
             "disease_category": disease_category if disease_category != "other" else reviewed_disease,
             "healthy_volunteer_flag": int(healthy_volunteer_flag),
             "has_feasibility_data": 1,
-            "has_recruitment_data": 0,
+            "has_recruitment_data": 1,
             "has_protocol_data": 1,
             "local_sample": local_sample,
             "national_sample": national_sample,
@@ -301,6 +342,7 @@ def render_app() -> None:
             "dedicated_recruiter": int(dedicated_recruiter),
             "site_count": int(site_count),
             "recruitment_methods_count": int(recruitment_methods_count),
+            "interest_rate": float(interest_rate),
             "target_enrollment": int(target_enrollment),
         }
 
@@ -324,7 +366,9 @@ def render_app() -> None:
         )
 
         st.markdown("## Scenario Visualization")
-        chart_data = scenario_results[["scenario_name", "predicted_accrual_rate", "estimated_duration_months"]].set_index("scenario_name")
+        chart_data = scenario_results[
+            ["scenario_name", "predicted_accrual_rate", "estimated_duration_months"]
+        ].set_index("scenario_name")
         st.bar_chart(chart_data)
 
         st.markdown("## Key Drivers")

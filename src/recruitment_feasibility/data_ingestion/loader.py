@@ -59,7 +59,20 @@ class DataIngestionService:
         Missing values are preserved by design to support partial records.
         """
         extractor = EligibilityFeatureExtractor()
+        # Ensure study_id is consistent across all sources
+        for key in sources:
+            if "study_id" in sources[key].columns:
+                sources[key]["study_id"] = sources[key]["study_id"].astype(str)
         merged = sources["studies"].copy()
+
+        print("\n=== DEBUG: study_id samples BEFORE merge ===")
+        print("STUDIES:", merged["study_id"].dropna().astype(str).unique()[:5])
+
+        if "recruitment_data" in sources:
+            print("RECRUITMENT:", sources["recruitment_data"]["study_id"].dropna().astype(str).unique()[:5])
+
+        if "ctms_data" in sources and not sources["ctms_data"].empty:
+            print("CTMS:", sources["ctms_data"]["study_id"].dropna().astype(str).unique()[:5])
 
         merged = merged.merge(sources["feasibility_data"], on="study_id", how="left")
         merged = merged.merge(sources["recruitment_data"], on="study_id", how="left")
